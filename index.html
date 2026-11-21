@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#14161f">
+  <title>1 из 8 миллиардов — симулятор жизни</title>
+  <meta name="description" content="Симулятор жизни: колесо стран решает, где ты родишься. Дальше — год за годом: учёба, любовь, карьера, бизнес, казино и тёмные дела.">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- главное меню -->
+    <section id="scr-menu" class="scr">
+      <canvas id="menu-map" width="720" height="280"></canvas>
+      <div class="logo"><b>1</b> из <b>8</b> миллиардов</div>
+      <div class="sub">Ты не выбираешь, где родиться.</div>
+      <div id="born-count" class="born"></div>
+      <div id="menu-btns" class="menu-btns"></div>
+      <div class="foot"><span class="age">16+</span> <span id="ver"></span></div>
+    </section>
+    <!-- колесо стран -->
+    <section id="scr-wheel" class="scr" hidden>
+      <div class="wheel-title" id="wheel-title">Где ты родишься?</div>
+      <div class="wheel-wrap"><canvas id="wheel" width="640" height="640"></canvas><div class="pointer">▼</div></div>
+      <div id="wheel-res" class="wheel-res"></div>
+      <div class="wheel-btns"><button id="spin" class="btn big primary">🎲 Крутить колесо</button><button id="wheel-go" class="btn big primary" hidden>Дальше →</button></div>
+    </section>
+    <!-- свидетельство о рождении -->
+    <section id="scr-birth" class="scr" hidden>
+      <div id="cert" class="cert"></div>
+      <div class="cert-btns"><button id="cert-go" class="btn big primary">Начать жизнь</button><button id="cert-re" class="btn ghost">↻ Переродиться</button></div>
+    </section>
+    <!-- жизнь -->
+    <section id="scr-life" class="scr" hidden>
+      <header id="life-top">
+        <button id="me" class="me" aria-label="Профиль"><canvas id="me-cv" width="96" height="96"></canvas></button>
+        <div class="who"><div id="who-name"></div><div id="who-sub"></div><div id="who-place"></div></div>
+        <div class="right"><div id="money"></div><button id="life-menu" class="ico" aria-label="Меню">☰</button></div>
+      </header>
+      <div id="stats"></div>
+      <div id="ticker" class="ticker"></div>
+      <div id="log" class="log"></div>
+      <footer id="life-bar">
+        <button id="btn-acts" class="btn">📋 Дела</button>
+        <button id="btn-year" class="btn primary year">＋ Год</button>
+        <button id="btn-auto" class="btn" aria-label="Авто">⏩</button>
+      </footer>
+    </section>
+    <!-- итоги жизни -->
+    <section id="scr-end" class="scr" hidden><div id="end" class="end"></div></section>
+
+    <div id="sheet" hidden><div id="sheet-card"></div></div>
+    <div id="toasts" class="toasts"></div>
+
+    <!-- обучение прямо в игре -->
+    <div id="tut" class="tut" hidden>
+      <svg id="tut-shade" hidden aria-hidden="true"><path fill-rule="evenodd"/></svg>
+      <div id="tut-ring" hidden></div>
+      <div id="tut-spot" hidden></div>
+      <div id="tut-finger" hidden aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V10h.5V8.5a1.5 1.5 0 0 1 3 0V10h.5a1.5 1.5 0 0 1 3 0v4.5c0 3.3-2.2 6.5-6 6.5h-1c-2.4 0-3.7-1.2-4.8-3l-2.4-4.1a1.4 1.4 0 0 1 2.3-1.6L9 14z"/></svg></div>
+      <div id="tut-bubble" role="status" aria-live="polite">
+        <div class="tut-head"><span class="tut-ava" aria-hidden="true">🌍</span><b>Судьба</b><span id="tut-step"></span></div>
+        <div id="tut-text"></div>
+        <div class="tut-btns"><button id="tut-skip" class="btn sm" hidden>Пропустить обучение</button><button id="tut-btn" class="btn sm primary" hidden></button></div>
+      </div>
+    </div>
+  </div>
+  <script src="js/data.js"></script>
+  <script src="js/names.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/systems.js"></script>
+  <script src="js/content_core.js"></script>
+  <script src="js/content_life.js"></script>
+  <script src="js/content_adult.js"></script>
+  <script src="js/content_world.js"></script>
+  <script src="js/content_dark.js"></script>
+  <script src="js/content_more.js"></script>
+  <script src="js/art.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/platform.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>
