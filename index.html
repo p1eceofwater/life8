@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
   <meta name="theme-color" content="#14161f">
   <title>1 из 8 миллиардов — симулятор жизни</title>
-  <meta name="description" content="Симулятор жизни: колесо стран решает, где ты родишься. Дальше — год за годом: учёба, любовь, карьера, бизнес, казино и тёмные дела.">
+  <meta name="description" content="Симулятор жизни: колесо стран решает, где ты родишься. Дальше — год за годом: учёба, любовь, карьера, бизнес, казино, тёмные дела, тюрьма и побеги.">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="css/style.css">
 </head>
@@ -34,19 +34,37 @@
     </section>
     <!-- жизнь -->
     <section id="scr-life" class="scr" hidden>
-      <header id="life-top">
-        <button id="me" class="me" aria-label="Профиль"><canvas id="me-cv" width="96" height="96"></canvas></button>
-        <div class="who"><div id="who-name"></div><div id="who-sub"></div><div id="who-place"></div></div>
-        <div class="right"><div id="money"></div><button id="life-menu" class="ico" aria-label="Меню">☰</button></div>
-      </header>
-      <div id="stats"></div>
-      <div id="ticker" class="ticker"></div>
-      <div id="log" class="log"></div>
-      <footer id="life-bar">
-        <button id="btn-acts" class="btn">📋 Дела</button>
-        <button id="btn-year" class="btn primary year">＋ Год</button>
-        <button id="btn-auto" class="btn" aria-label="Авто">⏩</button>
-      </footer>
+      <div class="life-grid">
+        <aside id="side-l" class="side"><div id="dossier"></div></aside>
+        <div id="life-main">
+          <header id="life-top">
+            <button id="me" class="me" aria-label="Профиль"><canvas id="me-cv" width="96" height="96"></canvas></button>
+            <div class="who"><div id="who-name"></div><div id="who-sub"></div><div id="who-place"></div></div>
+            <div class="right"><div id="money"></div><button id="life-menu" class="ico" aria-label="Меню">☰</button></div>
+          </header>
+          <div id="stats"></div>
+          <div id="timeline">
+            <div class="tl-ctrl">
+              <button id="tl-play" class="tlb" aria-label="Пуск и пауза">▶</button>
+              <button class="tlb sp" data-sp="1" aria-label="Скорость 1">×1</button>
+              <button class="tlb sp" data-sp="2" aria-label="Скорость 2">×2</button>
+              <button class="tlb sp" data-sp="4" aria-label="Скорость 4">×4</button>
+              <button id="tl-skip" class="tlb" aria-label="Мотать до решения" title="Мотать до решения">⏭</button>
+              <button id="tl-back" class="tlb" aria-label="Машина времени" title="Машина времени: на 5 лет назад">⏪</button>
+            </div>
+            <div class="tl-bar" id="tl-bar"><i id="tl-fill"></i><span id="tl-lbl"></span></div>
+          </div>
+          <div id="focus" class="focus"></div>
+          <div id="modebar" class="modebar"></div>
+          <div id="log" class="log"></div>
+          <footer id="life-bar">
+            <button id="btn-acts" class="btn">📋 Дела</button>
+            <button id="btn-year" class="btn primary year">＋ Год</button>
+          </footer>
+          <div class="keys">Пробел — пауза · → — год · 1 / 2 / 3 — скорость · 4 — до решения · Д — дела · Ф — фокус · Esc — меню</div>
+        </div>
+        <aside id="side-r" class="side"><div class="side-h">📋 Дела</div><div id="acts-panel"></div></aside>
+      </div>
     </section>
     <!-- итоги жизни -->
     <section id="scr-end" class="scr" hidden><div id="end" class="end"></div></section>
@@ -71,15 +89,21 @@
   <script src="js/names.js"></script>
   <script src="js/engine.js"></script>
   <script src="js/systems.js"></script>
+  <script src="js/crime2.js"></script>
   <script src="js/content_core.js"></script>
   <script src="js/content_life.js"></script>
   <script src="js/content_adult.js"></script>
   <script src="js/content_world.js"></script>
   <script src="js/content_dark.js"></script>
   <script src="js/content_more.js"></script>
+  <script src="js/content_crime2.js"></script>
+  <script src="js/content_prison.js"></script>
+  <script src="js/content_fun.js"></script>
   <script src="js/art.js"></script>
+  <script src="js/scenes.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/platform.js"></script>
+  <script src="js/minigames.js"></script>
   <script src="js/ui.js"></script>
 </body>
 </html>

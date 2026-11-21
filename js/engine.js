@@ -132,6 +132,9 @@
     c.news.push(t);
     return t;
   };
+  // сцена (пиксельная картинка) к последней записи летописи
+  B8.scene = function (c, id) { const l = c.log[c.log.length - 1]; if (l) l[5] = id; };
+  B8.yearHooks = [];
   B8.turn = function (c, label) { c.turns = c.turns || []; c.turns.push([c.age, label]); };
   B8.stress = function (c, x, why) { c.st += x; if (x > 0 && why) { c.stressors.push([c.age, why]); if (c.stressors.length > 12) c.stressors.shift(); } };
   B8.schedule = function (c, key, lo, hi, data) { const a = c.age + (hi == null ? lo : R.int(c, lo, hi)); c.queue.push([a, key, data || {}]); };
@@ -181,7 +184,8 @@
   B8.famTier = famTier;
   B8.houseLabel = function (c) {
     const ls = c.ls, urban = c.urban;
-    if (c.jail) return "камера на четверых";
+    if (c.jail) return c.pr && c.pr.rank >= 3 ? "камера у окна, лучшая в блоке" : "камера на четверых";
+    if (c.fug) return c.fug.abroad ? "съёмная комната под чужим именем" : "чужой диван у знакомых";
     if (c.a && c.a.mansion) return "особняк";
     if (c.a && c.a.home) return urban ? (ls >= 3 ? "своя большая квартира" : "своя квартира") : "свой дом";
     if (c.age < 18 || c.school || c.uni) {
@@ -210,7 +214,8 @@
   };
   B8.JOB_MULT = [0.12, 0.45, 0.8, 1.2, 1.9, 3.2];
   B8.jobTitle = function (c) {
-    if (c.jail) return "заключённ[ый|ая]".replace(/\[([^|]*)\|([^\]]*)\]/, (_, m, f) => (c.sex === "f" ? f : m));
+    if (c.jail) return c.sex === "f" ? "заключённая" : "заключённый";
+    if (c.fug) return "в бегах";
     if (c.biz) return "владел[ец|ица] бизнеса «" + c.biz.name + "»";
     if (c.crime && c.crime.rank >= 4 && c.crime.on) return B8.crime.rankTitle(c);
     if (!c.job) {
@@ -225,7 +230,8 @@
   };
   B8.stage = function (c) {
     if (!c.alive) return "умер" + (c.sex === "f" ? "ла" : "");
-    if (c.jail) return c.sex === "f" ? "Заключённая" : "Заключённый";
+    if (c.jail) return c.pr && c.pr.life ? "Пожизненно" : c.sex === "f" ? "Заключённая" : "Заключённый";
+    if (c.fug) return "В бегах";
     if (c.age < 1) return "Младенец";
     if (c.age < 6) return "Малыш";
     if (c.age < 18) return c.school ? (c.sex === "m" ? "Школьник" : "Школьница") : c.urban ? "Работающий подросток" : "Помогает семье";
@@ -298,7 +304,9 @@
       gap += R.int(c, 1, 4);
       if (gap > mAge - 16) break;
       const s = R.chance(c, 0.51) ? "m" : "f";
-      c.sibs.push(Object.assign(person(c, s, "sibling", -gap), { n: fn(s) }));
+      let nm = fn(s), tries = 0;
+      while ((nm === c.first || c.sibs.some((x) => x.n === nm)) && tries++ < 6) nm = fn(s);
+      c.sibs.push(Object.assign(person(c, s, "sibling", -gap), { n: nm }));
     }
     c.kids = []; c.exes = []; c.friend = null; c.spouse = null; c.date = null; c.friends = [];
     const hb = (k.hdi - 0.6) * 40, g = (m, s) => R.gauss(c, m, s);
@@ -311,10 +319,12 @@
     c.crime = { on: false, org: k.uw, rank: 0, rep: 0, heat: 0, rec: 0, earned: 0, ops: 0, orgName: "" };
     c.cas = { visits: 0, won: 0, lost: 0, add: 0, big: 0 };
     c.jail = 0; c.jailTot = 0; c.gen = opt.gen || 1; c.letter = ""; c.tm = 0; c.snaps = [];
+    c.crime.ev = 0; c.pr = null; c.fug = null; c.sm = { f: 0, posts: 0, viral: 0, best: 0 }; c.pets = []; c.paper = []; c.v = 2;
     c.month = R.int(c, 1, 12); c.doc = k.c3 + "-" + c.born + "-" + R.int(c, 1000000, 9999999);
     c.house = B8.houseLabel(c);
     c.look = B8.makeLook ? B8.makeLook(c) : null;
     B8.say(c, birthSentence(c), "n", "", true);
+    B8.scene(c, "birth");
     return c;
   };
   function birthSentence(c) {
@@ -336,8 +346,19 @@
       ["health", "🏃 Здоровье", "Здоровье↑"], ["study", "📚 Самообразование", "Ум↑ Навыки↑"], ["rest", "🎣 Отдых и увлечения", "Счастье↑ Стресс↓"]],
     old: [["balance", "⚖️ Всего понемногу", "Без перекосов"], ["family", "❤️ Семья и внуки", "Отношения↑ Счастье↑"], ["health", "🏃 Здоровье", "Здоровье↑"], ["rest", "🎣 Увлечения", "Счастье↑"]],
   };
-  B8.focusSet = (c) => (c.age < 6 ? [] : c.age < 18 ? (c.school ? B8.FOCUS.kid : B8.FOCUS.work) : c.retired || c.age >= 65 ? B8.FOCUS.old : B8.FOCUS.adult);
-  B8.defFocus = (c) => (c.age < 6 ? "" : c.age < 18 ? (c.school ? "study" : "chores") : "balance");
+  B8.FOCUS.adult.push(["money", "💰 Деньги", "Доход↑ Стресс↑"], ["dark", "🕶 Тёмные дела", "Подполье↑ Риск↑"]);
+  B8.FOCUS.street = ["street", "🛹 Улица", "Друзья↑ Риск↑"];
+  B8.FOCUS.jail = [["p_quiet", "🤫 Тихо досидеть", "Опасность↓ УДО↑"], ["p_resp", "💪 Уважение", "Уважение↑ Опасность↑"], ["p_study", "📚 Учёба", "Ум↑ диплом"],
+    ["p_work", "🧵 Работа", "🚬↑"], ["p_biz", "🍜 Дела за решёткой", "🍜↑ Риск↑"], ["p_escape", "🕳 Побег", "Готовность↑ Риск↑"]];
+  B8.FOCUS.fug = [["f_hide", "🏚 Залечь", "Розыск↓"], ["f_cash", "💵 Работа за наличку", "Деньги↑"], ["f_live", "🌴 Жить моментом", "Счастье↑ Розыск↑"]];
+  B8.focusSet = function (c) {
+    if (c.jail) return B8.FOCUS.jail;
+    if (c.fug) return B8.FOCUS.fug;
+    if (c.age < 6) return [];
+    if (c.age < 18) return (c.school ? B8.FOCUS.kid : B8.FOCUS.work).concat(c.age >= 14 ? [B8.FOCUS.street] : []);
+    return c.retired || c.age >= 65 ? B8.FOCUS.old : B8.FOCUS.adult;
+  };
+  B8.defFocus = (c) => (c.jail ? "p_quiet" : c.fug ? "f_hide" : c.age < 6 ? "" : c.age < 18 ? (c.school ? "study" : "chores") : "balance");
   function applyFocus(c) {
     const f = c.focus;
     c.careerY = f === "career" ? c.careerY + 1 : Math.max(0, c.careerY - 1);
@@ -349,6 +370,9 @@
     else if (f === "career") { c.sk += 3; c.st += 4; }
     else if (f === "balance") { c.sk += 1; c.soc += 1 * (1 - c.soc / 125); c.st -= 2; }
     else if (f === "family") { c.soc += 3 * (1 - c.soc / 125); c.hap += 2; c.st -= 5; }
+    else if (f === "money") { c.sk += 1; c.st += 3; }
+    else if (f === "dark") { c.st += 3; }
+    else if (f === "street") { c.soc += 2 * (1 - c.soc / 125); c.hap += 1.5; c.iq -= 0.5; if (R.r(c) < 0.25) c.flags.bad_friends = 1; }
     if (c.hobby && f !== "hobby" && f !== "rest") c.hobbyL += 0.4 * (1 - c.hobbyL / 110);
   }
 
@@ -376,7 +400,7 @@
   }
 
   // ───────── работа: поиск ─────────
-  B8.canField = (c, f) => c.edu >= B8.FIELDS[f][1] && !(f === "police" && c.crime.rec > 0) && !(f === "farm" && c.urban && c.age > 25);
+  B8.canField = (c, f) => !c.fug && c.edu >= B8.FIELDS[f][1] && !(["police", "law", "edu"].includes(f) && c.crime.rec > 0) && !(f === "farm" && c.urban && c.age > 25);
   B8.jobOffers = function (c) {
     const fields = Object.keys(B8.FIELDS).filter((f) => B8.canField(c, f) && f !== "art");
     const out = [];
@@ -417,6 +441,7 @@
       const F = B8.FIELDS[c.job.f];
       inc = gdp * B8.JOB_MULT[Math.min(5, c.job.lvl)] * F[2] * (0.6 + c.iq / 125) * rural * (1 + 0.08 * ec) * (1 + Math.min(c.job.y, 15) * 0.01) * (1 + c.sk / 400) * Math.exp(R.gauss(c, 0, 0.12));
       if (c.focus === "career") inc *= 1.12;
+      if (c.focus === "money") inc *= 1.1;
       if (c.flags.hobbypro) inc *= 1 + c.hobbyL / 200;
       if (c.conds.drinking) inc *= 0.8;
       if (c.crime.rec && c.job.f !== "labor") inc *= 0.9;
@@ -424,6 +449,8 @@
     if (c.biz && B8.biz) inc += B8.biz.year(c);
     if (c.spouse && c.spouse.alive && !c.jail) inc += gdp * 0.35 * rural * (c.flags.spouse_good ? 1.4 : 1);
     if (c.crime.on && B8.crime) inc += B8.crime.passive(c);
+    if (!c.jail && c.focus === "money" && !c.fug) inc += gdp * 0.1 * rural;
+    if (!c.jail && B8.incHook) inc += B8.incHook(c);
     c.income = inc;
     const kids = c.age < 55 ? Math.min(c.kids.filter((x) => x.alive && c.age - x.born < 22).length, 6) : 0;
     const need = gdp * 0.32 * (c.urban ? 1 : 0.55) * (1 + 0.15 * kids);
@@ -558,6 +585,7 @@
       if (c.uni.y >= (c.uni.t === 4 ? 2 : 4)) {
         c.edu = c.uni.t; const abroad = c.uni.abroad; c.uni = null;
         B8.say(c, c.edu === 4 ? "Ты получил[|а] диплом магистра!" : "Ты получил[|а] диплом бакалавра!", "g", abroad ? "учёба за границей" : "", true);
+        B8.scene(c, "grad");
         if (!c.job && !c.biz) B8.findJob(c);
       }
     } else c.iq += (a < 6 ? 1.6 : 0.3) * (1 - c.iq / 125);
@@ -645,7 +673,7 @@
   // ───────── смерть ─────────
   B8.die = function (c, cause) { c.alive = false; c.cause = cause; c.pend = []; };
   B8.CAUSE = { "младенческая смертность": "болезни новорождённых", болезнь: "болезнь", старость: "старость", "несчастный случай": "несчастный случай", бедность: "бедность и её последствия",
-    война: "вооружённый конфликт", рак: "онкологическое заболевание", сердце: "болезнь сердца", разборки: "криминальные разборки", тюрьма: "болезнь в тюрьме", авария: "авария", стихия: "стихийное бедствие" };
+    война: "вооружённый конфликт", рак: "онкологическое заболевание", сердце: "болезнь сердца", разборки: "криминальные разборки", тюрьма: "болезнь в тюрьме", авария: "авария", стихия: "стихийное бедствие", побег: "неудачный побег", "в бегах": "болезнь в бегах" };
   function deathCheck(c) {
     const a = c.age;
     if (c.flags.tut && a < 12) { if (c.h < 20) c.h = 20; return; } // первая жизнь в обучении не обрывается в детстве
@@ -691,6 +719,7 @@
     notePeak(c);
     if (c.adapt) { c.adapt -= 1; if (!c.adapt) { c.st -= 10; B8.say(c, "Ты наконец освоил[ся|ась] в новой стране: язык, друзья, свои места.", "g", "три года адаптации", true); } }
     if (c.jail && B8.crime) B8.crime.jailYear(c);
+    for (const f of B8.yearHooks) if (c.alive) f(c);
     if (c.age % 10 === 0 && c.album[c.album.length - 1] !== c.age) c.album.push(c.age);
     if (c.age === 1 && B8.flag(c, "_")) {}
     beginYear(c);
@@ -755,7 +784,8 @@
     }
     // не больше 3 событий в год и не больше 2 решений
     for (let i = fired.length - 1; i > 0; i--) { const j = Math.floor(R.r(c) * (i + 1)); [fired[i], fired[j]] = [fired[j], fired[i]]; }
-    fired.sort((x, y) => (y.abs ? 1 : 0) - (x.abs ? 1 : 0));
+    const rk = (e) => (e.abs ? 0 : 2) + (e.minor ? 1 : 0);
+    fired.sort((x, y) => rk(x) - rk(y));
     let n = 0, dec = c.pend.length;
     const cap = a < 3 ? 2 : 3;
     for (const e of fired) {
@@ -822,15 +852,30 @@
     const e = B8.EV[pd.id], d = pd.d || {};
     const text = typeof e.t === "function" ? e.t(c, d) : Array.isArray(e.t) ? e.t[(c.counts[e.id] || 1) % e.t.length] : e.t;
     const opts = e.o.map((o, i) => ({ i, t: B8.fmt(c, typeof o.t === "function" ? o.t(c, d) : o.t, d), hint: o.hint ? B8.fmt(c, typeof o.hint === "function" ? o.hint(c, d) : o.hint, d) : "",
-      p: o.p != null ? clamp(Math.round((typeof o.p === "function" ? o.p(c, d) : o.p) * 100), 1, 99) : null, ok: !o.if || o.if(c, d) })).filter((o) => o.ok);
+      p: o.p != null ? clamp(Math.round((typeof o.p === "function" ? o.p(c, d) : o.p) * 100), 1, 99) : null, ok: !o.if || o.if(c, d), mg: o.mg || "" })).filter((o) => o.ok);
     return { title: e.title ? B8.fmt(c, typeof e.title === "function" ? e.title(c, d) : e.title, d) : B8.TITLES[e.cat] || "Решение", text: B8.fmt(c, text, d),
       why: e.why ? B8.fmt(c, typeof e.why === "function" ? e.why(c, d) : e.why, d) : "", opts, cat: e.cat || "", icon: e.icon || "" };
   };
   // выбрать вариант: применить последствия, вернуть итоговый текст
-  B8.choose = function (c, i, auto) {
+  // решение устарело, если его условие больше не выполняется (например, бизнес конфисковали в тот же год)
+  B8.pendOk = function (c, pd) {
+    const e = B8.EV[pd.id];
+    if (!e || !e.o) return false;
+    try {
+      if (e.valid) return !!e.valid(c, pd.d || {});
+      if (e.cat === "biz") return !!c.biz && !c.jail;
+      if (e.jail) return !!c.jail;
+      if (/^(p_udo|p_wedding|p_bizpick|p_gangjoin|p_kids_shame|p_parents_visit|escape_|cat_back|f2_|bail_run|heist_rat|rat_hunt)/.test(e.id) && e.if) return !!e.if(c, pd.d || {});
+    } catch (x) { return false; }
+    return true;
+  };
+  B8.cleanPend = function (c) { while (c.pend.length && !B8.pendOk(c, c.pend[0])) c.pend.shift(); return c.pend.length; };
+  B8.choose = function (c, i, auto, extra) {
+    B8.cleanPend(c);
     const pd = c.pend.shift();
     if (!pd) return null;
     const e = B8.EV[pd.id], d = pd.d || {}, o = e.o[i] || e.o[0];
+    if (extra) Object.assign(d, extra);
     const label = B8.fmt(c, typeof o.t === "function" ? o.t(c, d) : o.t, d);
     const before = c.log.length;
     B8.say(c, (typeof e.title === "string" ? e.title : B8.TITLES[e.cat] || "Решение") + " · " + (auto ? "Авто: " : "") + label, "d", "", false, d);
@@ -848,7 +893,10 @@
   };
   // автовыбор (для «авто» и ровесников): осторожный, но разумный
   B8.autoPick = function (c) {
-    const pd = c.pend[0], e = B8.EV[pd.id];
+    B8.cleanPend(c);
+    const pd = c.pend[0];
+    if (!pd) return 0;
+    const e = B8.EV[pd.id];
     const opts = e.o.map((o, i) => [o, i]).filter(([o]) => !o.if || o.if(c, pd.d || {}));
     const sc = ([o]) => (o.auto != null ? (typeof o.auto === "function" ? o.auto(c, pd.d || {}) : o.auto) : 0) + (o.p != null ? (typeof o.p === "function" ? o.p(c, pd.d) : o.p) - 0.5 : 0) + R.r(c) * 0.8;
     opts.sort((x, y) => sc(y) - sc(x));
@@ -887,12 +935,17 @@
   };
   B8.epitaph = function (c) {
     const g = (m, f) => (c.sex === "f" ? f : m);
+    if (c.pr && c.pr.life) return g("Пожизненно — это тоже жизнь. Он прожил её как мог.", "Пожизненно — это тоже жизнь. Она прожила её как могла.");
+    if (c.fug) return g("Его так и не поймали.", "Её так и не поймали.");
+    if (c.flags.esc_heli) return g("Улетел из тюрьмы на вертолёте. Об этом снимут кино.", "Улетела из тюрьмы на вертолёте. Об этом снимут кино.");
+    if (c.sm && c.sm.best >= 1e6) return g("Миллион подписчиков. И несколько настоящих друзей.", "Миллион подписчиков. И несколько настоящих друзей.");
     if (c.crime.rank >= 5) return g("Его боялись три страны и любила одна бабушка.", "Её боялись три страны и любила одна бабушка.");
     if (c.jailTot >= 10) return g("Он знал цену свободе лучше всех.", "Она знала цену свободе лучше всех.");
     if (B8.netWorth(c) > B8.gdp(c) * 500) return g("Мог купить что угодно. Кроме лишнего дня.", "Могла купить что угодно. Кроме лишнего дня.");
     if (c.cas.big) return g("Однажды он сорвал банк. Об этом помнит весь город.", "Однажды она сорвала банк. Об этом помнит весь город.");
     if (c.gk >= 5) return g("Дедушка, которого обожали внуки.", "Бабушка, которую обожали внуки.");
     if (c.flags.master) return g("Мастер своего дела.", "Мастер своего дела.");
+    if ((c.pets || []).length >= 4) return g("Его любили люди. А звери — ещё сильнее.", "Её любили люди. А звери — ещё сильнее.");
     if (c.age < 5) return "Слишком мало времени, чтобы успеть стать кем-то. Но достаточно, чтобы быть любимым.";
     if (c.age < 30) return g("Ушёл слишком рано.", "Ушла слишком рано.");
     if (c.hsum / (c.age + 1) > 70) return g("Прожил счастливую жизнь.", "Прожила счастливую жизнь.");

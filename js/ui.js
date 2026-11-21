@@ -1,25 +1,33 @@
-/* 1 из 8 миллиардов — интерфейс: меню, колесо стран, свидетельство, жизнь, дела, казино, тёмные дела, итоги, обучение. */
+/* 1 из 8 миллиардов — интерфейс: меню, колесо стран, свидетельство, жизнь (полоса года, скорость, фокус, ПК-раскладка),
+   дела, казино, тёмные дела и ограбления, тюрьма и бега, газеты, итоги, обучение, горячие клавиши. */
 (function () {
   "use strict";
   const B8 = window.B8, R = B8.R;
-  const VERSION = "1.0.0";
+  const VERSION = "2.0.0";
   const $ = (s, r) => (r || document).querySelector(s), $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
   const sfx = (n) => B8.audio && B8.audio.sfx(n);
   const money = (x) => B8.money(x);
   const P = () => B8.platform;
+  const isPC = () => window.matchMedia("(min-width: 860px) and (min-height: 560px)").matches;
+  const isWide = () => window.matchMedia("(min-width: 1180px) and (min-height: 560px)").matches;
   let S = null; // текущая жизнь
-  let M = null; // всё, что живёт дольше одной жизни: атлас, достижения, статистика, настройки, обучение
-  const UI = { screen: "menu", sheet: null, auto: false, autoT: 0, logShown: 0, lastAge: -1, rerolls: 0, mode: "new", endRendered: false };
+  let M = null; // всё, что живёт дольше одной жизни
+  const UI = { screen: "menu", sheet: null, logShown: 0, lastAge: -1, rerolls: 0, mode: "new", endRendered: false, focusKey: "" };
   B8.ui = UI;
+  // время: полоса года идёт сама; решения ставят на паузу
+  const TL = { run: false, sp: 1, skip: false, t: 0, last: performance.now(), q: [], cap: 0 };
+  const YEAR_MS = 6500;
 
   // ═════ сохранение ═════
   const KEY_L = "b8_life", KEY_M = "b8_meta";
-  function defMeta() { return { v: 1, atlas: {}, ach: {}, st: { lives: 0, years: 0, maxAge: 0, maxNet: 0, kids: 0, jail: 0, bosses: 0 }, set: { sound: true, speed: 1 }, tut: 0, lastAd: 0, daily: {}, codes: 0 }; }
+  function defMeta() { return { v: 2, atlas: {}, ach: {}, st: { lives: 0, years: 0, maxAge: 0, maxNet: 0, kids: 0, jail: 0, bosses: 0, heists: 0, escapes: 0 }, set: { sound: true, spd: 1, voice: true }, tut: 0, lastAd: 0, daily: {}, codes: 0 }; }
   function loadAll() {
     try { M = Object.assign(defMeta(), JSON.parse(localStorage.getItem(KEY_M) || "null") || {}); } catch (e) { M = defMeta(); }
+    M.set = Object.assign({ sound: true, spd: 1, voice: true }, M.set || {}); M.st = Object.assign(defMeta().st, M.st || {});
     try { S = JSON.parse(localStorage.getItem(KEY_L) || "null"); } catch (e) { S = null; }
     if (S && (!S.v || S.done)) S = S.done ? S : null;
+    if (S) B8.migrate(S);
     B8.audio.on = M.set.sound !== false;
   }
   let saveT = 0;
@@ -31,7 +39,7 @@
   function cloudPush(force) {
     if (!P() || !P().vk) return;
     let life = null;
-    if (S) { life = Object.assign({}, S, { log: S.log.slice(-220), snaps: [] }); }
+    if (S) life = Object.assign({}, S, { log: S.log.slice(-220), snaps: [] });
     P().cloudSave({ m: M, l: life, at: Date.now() }, force);
   }
   B8.toast = toast;
@@ -42,24 +50,26 @@
     d.className = "toast " + (kind || "");
     d.innerHTML = t;
     $("#toasts").appendChild(d);
+    while ($("#toasts").children.length > 4) $("#toasts").firstElementChild.remove();
     setTimeout(() => d.remove(), 3200);
   }
   function show(name) {
     UI.screen = name;
     for (const s of $$(".scr")) s.hidden = s.id !== "scr-" + name;
-    if (name !== "life") stopAuto();
+    if (name !== "life") { TL.run = false; TL.skip = false; }
     if (name === "menu") renderMenu();
     if (name === "life") renderLife(true);
     TUT.ev("screen:" + name);
   }
+  const LOCKED = ["decision", "result", "casino", "confirm", "heist", "mg"];
   function sheet(html, kind, onClose) {
     UI.sheet = kind || "sheet";
     UI.onClose = onClose || null;
     const card = $("#sheet-card");
     card.innerHTML = html;
     card.scrollTop = 0;
+    card.className = "k-" + UI.sheet;
     $("#sheet").hidden = false;
-    stopAuto(true);
     TUT.ev("sheet:" + UI.sheet);
     return card;
   }
@@ -67,14 +77,18 @@
     $("#sheet").hidden = true;
     const k = UI.sheet;
     UI.sheet = null;
+    if (B8.mg) B8.mg.active = null;
     if (UI.onClose) { const f = UI.onClose; UI.onClose = null; f(); }
     TUT.ev("closed:" + k);
-    if (UI.screen === "life") { renderLife(); resumeAuto(); }
+    if (UI.screen === "life") renderLife();
   }
-  $("#sheet").addEventListener("click", (e) => { if (e.target.id === "sheet" && !["decision", "result", "casino", "confirm"].includes(UI.sheet)) closeSheet(); });
+  $("#sheet").addEventListener("click", (e) => { if (e.target.id === "sheet" && !LOCKED.includes(UI.sheet)) closeSheet(); });
   const ageWord = (n) => n + " " + B8.years(n);
   const pct = (v) => Math.max(0, Math.min(100, Math.round(v)));
   const cntry = (code) => B8.K(code).n;
+  const F = (s, d) => B8.fmt(S, s, d);
+  const kv = (a, b) => `<div class="kv"><span>${a}</span><span>${b}</span></div>`;
+  const meter = (label, v, col, shown) => `<div class="mt"><span>${label}<b>${shown != null ? shown : Math.round(v) + "%"}</b></span><div class="meter"><i style="width:${pct(v)}%;background:${col}"></i></div></div>`;
 
   // ═════ меню ═════
   let mapAnim = 0, births = 0, bornT0 = 0;
@@ -82,11 +96,11 @@
     const has = S && S.alive && !S.done;
     const today = new Date().toISOString().slice(0, 10);
     const b = [];
-    if (has) b.push(`<button class="btn big primary" data-a="cont">▶ Продолжить жизнь<small>${esc(B8.fullName(S))}, ${ageWord(S.age)} · ${esc(cntry(S.cur))}</small></button>`);
+    if (has) b.push(`<button class="btn big primary" data-a="cont">▶ Продолжить жизнь<small>${esc(B8.fullName(S))}, ${ageWord(S.age)} · ${esc(cntry(S.cur))}${S.jail ? " · за решёткой" : S.fug ? " · в бегах" : ""}</small></button>`);
     b.push(`<button class="btn big ${has ? "" : "primary"}" data-a="new">🎲 Новая жизнь<small>колесо решит, где ты родишься</small></button>`);
     b.push(`<div class="row"><button class="btn" data-a="daily">📅 Жизнь дня<small>${M.daily[today] ? "уже прожита" : "одна на всех сегодня"}</small></button><button class="btn" data-a="code">🔑 Код судьбы<small>прожить чужую жизнь</small></button></div>`);
     b.push(`<div class="row"><button class="btn" data-a="atlas">🗺 Атлас<small>${Object.keys(M.atlas).length} из 69 стран</small></button><button class="btn" data-a="ach">🏆 Достижения<small>${Object.keys(M.ach).length} из ${ACH.length}</small></button></div>`);
-    b.push(`<div class="row"><button class="btn" data-a="stats">📊 Статистика<small>${M.st.lives} ${plural(M.st.lives, "жизнь", "жизни", "жизней")}</small></button><button class="btn" data-a="set">⚙ Настройки<small>звук, скорость, обучение</small></button></div>`);
+    b.push(`<div class="row"><button class="btn" data-a="stats">📊 Статистика<small>${M.st.lives} ${plural(M.st.lives, "жизнь", "жизни", "жизней")}</small></button><button class="btn" data-a="set">⚙ Настройки<small>звук, скорость, совесть</small></button></div>`);
     b.push(`<button class="btn ghost" data-a="about">ℹ Об игре</button>`);
     $("#menu-btns").innerHTML = b.join("");
     $("#ver").textContent = "v" + VERSION;
@@ -99,7 +113,6 @@
     mapAnim = requestAnimationFrame(mapLoop);
     if (UI.screen !== "menu") return;
     const cv = $("#menu-map");
-    // за секунду на Земле рождается ~4,3 ребёнка
     const t = (performance.now() - bornT0) / 1000, n = Math.floor(t * 4.3);
     while (births < n) { births++; const k = pickBirth(); flashes.push([k.c, performance.now()]); }
     while (flashes.length && performance.now() - flashes[0][1] > 1800) flashes.shift();
@@ -138,11 +151,10 @@
       S.meta.mode = mode;
       if (TUT.active()) S.flags.tut = 1;
       S.peers = [0, 1, 2].map(() => Math.floor(B8.rnd(S) * 31 ** 6));
-      UI.logShown = 0; UI.endRendered = false;
+      UI.logShown = 0; UI.endRendered = false; TL.t = 0; TL.q = []; TL.cap = S.log.length;
       if (heir) { renderBirth(); show("birth"); return; }
       openWheel();
     };
-    // реклама — только в естественной паузе: перед новой жизнью, не в первой, не чаще раза в 3 минуты
     const now = Date.now();
     if (M.st.lives >= 1 && now - (M.lastAd || 0) > 180000 && P() && P().hasAds() && TUT.done()) { M.lastAd = now; P().interstitial(start); }
     else start();
@@ -205,6 +217,7 @@
     show("life");
     save(true);
     TUT.ev("lifeStart");
+    if (TUT.done()) play(M.set.spd || 1);
   };
   $("#cert-re").onclick = () => {
     UI.rerolls++;
@@ -219,6 +232,9 @@
   function renderLife(full) {
     if (!S) return;
     const c = S;
+    if (full) { TL.cap = c.log.length; TL.q = []; UI.focusKey = ""; }
+    const scr = $("#scr-life");
+    scr.classList.toggle("m-jail", !!c.jail); scr.classList.toggle("m-fug", !!c.fug);
     B8.portrait($("#me-cv"), c);
     $("#who-name").textContent = B8.fullName(c);
     $("#who-sub").textContent = `${ageWord(c.age)} · ${B8.stage(c)}`;
@@ -233,100 +249,245 @@
       return `<div class="st ${cls}" title="${lab}">${ic} ${lab}<b>${v}</b><div class="bar"><i style="width:${v}%;background:${col}"></i></div></div>`;
     }).join("");
     if (UI.lastAge !== c.age) { prevSt = {}; STATS.forEach(([k]) => (prevSt[k] = pct(c[k]))); UI.lastAge = c.age; }
-    $("#ticker").innerHTML = `<b>${c.born + c.age}:</b> ${esc(B8.ticker(c))} · Ты богаче ${B8.percentile(c)}% людей Земли`;
-    renderLog(full);
+    renderFocus(); renderMode(); renderLog(full); paintTL();
     $("#btn-year").disabled = !c.alive;
-    $("#btn-auto").classList.toggle("on", UI.auto);
-    $("#btn-auto").textContent = UI.auto ? "⏸" : "⏩";
+    renderDossier(); renderActsPanel();
+  }
+  function renderFocus() {
+    const c = S, box = $("#focus"), set = B8.focusSet(c);
+    if (!set.length) { const k = "none" + c.age; if (UI.focusKey !== k) { UI.focusKey = k; box.innerHTML = `<span class="fl">🎯</span><span class="fc off">Фокус года появится в 6 лет</span>`; } return; }
+    if (!c.focus || !set.some((f) => f[0] === c.focus)) c.focus = B8.defFocus(c);
+    const key = set.map((f) => f[0]).join() + c.focus;
+    if (key === UI.focusKey) return;
+    UI.focusKey = key;
+    const cur = set.find((f) => f[0] === c.focus);
+    const setKey = set.map((f) => f[0]).join();
+    box.innerHTML = `<span class="fl" title="Фокус года">🎯</span>` + set.map(([k, l, h]) => `<button class="fc ${c.focus === k ? "on" : ""}" data-f="${k}" title="${esc(h)}">${esc(l)}</button>`).join("") + (cur ? `<span class="fh">${esc(cur[2])}</span>` : "");
+    if (UI.focusSet !== setKey) { UI.focusSet = setKey; box.scrollLeft = 0; }
+    const on = box.querySelector(".fc.on");
+    if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) box.scrollLeft = Math.max(0, on.offsetLeft - 40);
+  }
+  $("#focus").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-f]"); if (!b || !S || !S.alive) return;
+    setFocus(b.dataset.f);
+  });
+  function setFocus(k) {
+    const set = B8.focusSet(S), f = set.find((x) => x[0] === k);
+    if (!f) return;
+    S.focus = k; sfx("click"); UI.focusKey = "";
+    renderFocus(); renderActsPanel();
+    toast(`🎯 ${esc(f[1])} <small>${esc(f[2])}</small>`);
+    TUT.ev("focus");
+  }
+  function cycleFocus() { const set = B8.focusSet(S); if (!set.length) return; const i = set.findIndex((x) => x[0] === S.focus); setFocus(set[(i + 1) % set.length][0]); }
+  function renderMode() {
+    const c = S, box = $("#modebar");
+    let h = "", cls = "";
+    const PR = B8.prison;
+    if (c.jail && c.pr) {
+      const p = c.pr; cls = "jail";
+      h = `<b>⛓ ${esc(p.name)}</b> · ${p.life ? "пожизненно" : "осталось " + ageWord(c.jail)} · ${PR.RANKS[p.rank]} · 💪 ${Math.round(p.resp)} · ⚠️ ${Math.round(p.dang)} · 🚬 ${p.cig} · 🍜 ${p.nood}${p.plan ? ` · ${PR.PLAN[p.plan][0]} ${Math.round(p.prep)}%` : ""}`;
+    } else if (c.fug) {
+      const f = c.fug; cls = "fug";
+      h = `<b>🚨 В розыске ${Math.round(f.wanted)}%</b> · в бегах ${ageWord(f.y)}${f.docs ? " · 🪪 документы" : ""}${f.face ? " · 💉 новое лицо" : ""}${f.abroad ? " · " + esc(cntry(f.abroad)) : ""}`;
+    } else if (c.crime.on || (c.crime.ev || 0) > 8 || c.crime.heat > 25) {
+      const cr = c.crime; cls = "crime";
+      h = `<b>🕶 ${cr.on ? esc(cr.orgName) + " · " + esc(B8.crime.rankTitle(c)) : "Тёмные делишки"}</b> · 🧾 улики ${Math.round(cr.ev || 0)}% · 🚓 полиция ${Math.round(cr.heat)}%`;
+    } else h = `<b>${c.born + c.age}:</b> ${esc(B8.ticker(c))} · Ты богаче ${B8.percentile(c)}% людей Земли`;
+    box.className = "modebar " + cls;
+    box.innerHTML = h;
   }
   function renderLog(full) {
-    const box = $("#log"), c = S;
-    if (full || UI.logShown > c.log.length) { box.innerHTML = ""; UI.logShown = Math.max(0, c.log.length - 160); if (UI.logShown) box.innerHTML = `<button class="btn sm ghost more" data-more="1">Показать раньше</button>`; }
+    const box = $("#log"), c = S, upto = Math.min(c.log.length, TL.cap);
+    if (full || UI.logShown > upto) { box.innerHTML = ""; UI.logShown = Math.max(0, upto - 160); if (UI.logShown) box.innerHTML = `<button class="btn sm ghost more" data-more="1">Показать раньше</button>`; }
     let html = "", lastAge = UI.logShown ? c.log[UI.logShown - 1][0] : -1;
     const lastNode = box.lastElementChild;
     if (lastNode && lastNode.dataset && lastNode.dataset.age != null) lastAge = +lastNode.dataset.age;
-    for (let i = UI.logShown; i < c.log.length; i++) {
-      const [a, t, k, why, big] = c.log[i];
-      if (a !== lastAge) { html += `<div class="yr" data-age="${a}">${ageWord(a)}<small>${c.born + a}</small></div>`; lastAge = a; }
-      html += `<div class="ev ${k}${big ? " big" : ""}${full ? "" : " new"}" data-age="${a}"><i></i><span>${esc(t)}${why ? `<em>← ${esc(why)}</em>` : ""}</span></div>`;
-    }
-    UI.logShown = c.log.length;
-    if (html) { box.insertAdjacentHTML("beforeend", html); box.scrollTop = box.scrollHeight; }
+    for (let i = UI.logShown; i < upto; i++) { const r = entry(c.log[i], lastAge, !full); lastAge = c.log[i][0]; html += r; }
+    UI.logShown = upto;
+    if (html) { box.insertAdjacentHTML("beforeend", html); drawScenes(box); box.scrollTop = box.scrollHeight; }
   }
+  function entry(l, lastAge, fresh) {
+    const [a, t, k, why, big, sc] = l;
+    let h = "";
+    if (a !== lastAge) h += `<div class="yr" data-age="${a}">${ageWord(a)}<small>${S.born + a}</small></div>`;
+    if (k === "c" && M.set.voice === false) return h;
+    if (sc) h += `<canvas class="scene" width="192" height="96" data-sc="${sc}" data-age="${a}"></canvas>`;
+    if (k === "p") return h + `<div class="ev p${fresh ? " new" : ""}" data-age="${a}"><div class="np"><small>📰 ${esc(why)}</small><b>${esc(t)}</b></div></div>`;
+    return h + `<div class="ev ${k}${big ? " big" : ""}${fresh ? " new" : ""}" data-age="${a}"><i></i><span>${esc(t)}${why ? `<em>← ${esc(why)}</em>` : ""}</span></div>`;
+  }
+  function drawScenes(box) { for (const cv of $$("canvas.scene:not([data-done])", box)) { B8.drawScene(cv, cv.dataset.sc, S); cv.dataset.done = 1; } }
   $("#log").addEventListener("click", (e) => {
     if (!e.target.closest("[data-more]")) return;
     const box = $("#log"), c = S;
     let html = "", lastAge = -1;
-    for (let i = 0; i < c.log.length; i++) { const [a, t, k, why, big] = c.log[i]; if (a !== lastAge) { html += `<div class="yr" data-age="${a}">${ageWord(a)}<small>${c.born + a}</small></div>`; lastAge = a; } html += `<div class="ev ${k}${big ? " big" : ""}" data-age="${a}"><i></i><span>${esc(t)}${why ? `<em>← ${esc(why)}</em>` : ""}</span></div>`; }
-    box.innerHTML = html; UI.logShown = c.log.length;
+    const upto = Math.min(c.log.length, TL.cap);
+    for (let i = 0; i < upto; i++) { html += entry(c.log[i], lastAge, false); lastAge = c.log[i][0]; }
+    box.innerHTML = html; UI.logShown = upto; drawScenes(box);
+  });
+
+  // ═════ ПК: досье слева, дела справа ═════
+  function renderDossier() {
+    if (!isWide() || !S) return;
+    const c = S, p = c.pr, f = c.fug, cr = c.crime, PR = B8.prison;
+    let mode = "";
+    if (c.jail && p) mode = `<div class="dz jail"><h4>⛓ ${esc(p.name)}</h4>${kv("Срок", p.life ? "пожизненно" : "осталось " + ageWord(c.jail))}${kv("Положение", PR.RANKS[p.rank])}${meter("💪 Уважение", p.resp, "#ffd166")}${meter("⚠️ Опасность", p.dang, "#ff6b6b")}${kv("Валюта", "🚬 " + p.cig + " · 🍜 " + p.nood)}${p.biz ? kv("Своё дело", PR.PBIZ[p.biz][1]) : ""}${p.gang ? kv("Банда", "«" + esc(p.gang) + "»") : ""}${p.cat ? kv("Кот", esc(p.cat)) : ""}${p.plan ? meter(PR.PLAN[p.plan][0] + " " + PR.PLAN[p.plan][1], p.prep, "#5fd38d") + meter("👀 Подозрения охраны", p.sus, "#b78cff") : ""}</div>`;
+    else if (f) mode = `<div class="dz fug"><h4>🚨 В розыске</h4>${meter("Розыск", f.wanted, "#ff6b6b")}${kv("В бегах", ageWord(f.y))}${kv("Документы", f.docs ? "фальшивые" : "нет")}${kv("Лицо", f.face ? "после пластики" : "своё")}${f.abroad ? kv("Страна", esc(cntry(f.abroad))) : ""}<button class="btn sm" data-dz="poster">🚨 Посмотреть плакат</button></div>`;
+    else if (cr.on || (cr.ev || 0) > 5 || cr.heat > 15 || cr.rec) mode = `<div class="dz crime"><h4>🕶 ${cr.on ? esc(cr.orgName) : "Тёмные дела"}</h4>${cr.on ? kv("Положение", esc(B8.crime.rankTitle(c))) : ""}${meter("Репутация", Math.min(100, cr.rep / 6), "#b78cff", Math.round(cr.rep))}${meter("🧾 Улики", cr.ev || 0, "#ff9f43")}${meter("🚓 Внимание полиции", cr.heat, "#ff6b6b")}${cr.rec ? kv("Судимостей", cr.rec) : ""}${c.counts.heists ? kv("Ограблений", c.counts.heists) : ""}</div>`;
+    const fam = [];
+    if (c.spouse && c.spouse.alive) fam.push(kv(c.spouse.sex === "f" ? "Жена" : "Муж", esc(c.spouse.n.split(" ")[0])));
+    else if (c.date) fam.push(kv("Встречаетесь", esc(c.date.n.split(" ")[0])));
+    const kids = c.kids.filter((x) => x.alive);
+    if (kids.length) fam.push(kv("Дети", kids.map((x) => esc(x.n.split(" ")[0])).join(", ")));
+    if (c.gk) fam.push(kv("Внуки", c.gk));
+    fam.push(kv("Родители", [c.mother.alive ? "мама" : "", c.father.alive ? "папа" : ""].filter(Boolean).join(" и ") || "нет"));
+    if (c.friend && c.friend.alive) fam.push(kv("Друг", esc(c.friend.n.split(" ")[0])));
+    const pets = (c.pets || []).filter((x) => x.alive);
+    $("#dossier").innerHTML = `<button class="dz-me" data-dz="me"><canvas id="dz-cv" width="96" height="96"></canvas><div><b>${esc(B8.fullName(c))}</b><small>${ageWord(c.age)} · ${esc(B8.stage(c))}</small><small>${esc(c.city)}, ${esc(B8.K(c.cur).n)}</small></div></button>
+      <div class="dz-money"><b class="${c.money < 0 ? "loss" : ""}">${c.age < 16 && Math.abs(c.money) < 1 ? "—" : money(c.money)}</b><small>доход ${money(c.income)} в год · состояние ${money(B8.netWorth(c))}</small></div>
+      <div class="dz dz-stats">${STATS.map(([key, ic, lab, col]) => meter(ic + " " + lab, c[key], col, pct(c[key]))).join("")}</div>
+      ${mode}
+      <div class="dz"><h4>🏠 Жизнь</h4>${kv("Дом", esc(c.house))}${kv("Уровень", esc(B8.LS[c.ls]))}${kv("Место в мире", "богаче " + B8.percentile(c) + "%")}${kv("Образование", esc(B8.EDU[c.edu]))}${kv("Работа", esc(B8.jobTitle(c)))}</div>
+      <div class="dz"><h4>👪 Близкие</h4>${fam.join("")}${pets.length ? kv("Питомцы", pets.map((x) => B8.pets.PK[x.k][1] + " " + esc(x.n)).join(", ")) : ""}</div>
+      <div class="dz"><h4>📱 Слава</h4>${kv("Подписчики", B8.social.fmtF(c.sm.f || 0))}${kv("Газеты о тебе", (c.paper || []).length ? `<button class="lnk" data-dz="paper">${c.paper.length} 📰</button>` : "пока нет")}</div>`;
+    B8.portrait($("#dz-cv"), c);
+  }
+  $("#dossier").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-dz]"); if (!b) return;
+    sfx("click");
+    if (b.dataset.dz === "me") openProfile();
+    if (b.dataset.dz === "poster") openPoster();
+    if (b.dataset.dz === "paper") openPapers();
+  });
+  function actsHTML(groups) {
+    return groups.map(([t, items]) => `<h3>${esc(t)}</h3><div class="grid2">${items.map((it) =>
+      `<button class="act" data-act="${it.id}" ${it.ok ? "" : "disabled"}><span class="i">${it.icon}</span><span><b>${esc(F(it.label))}</b><small>${esc(F(it.ok ? it.hint || "" : it.why || it.hint || ""))}</small></span></button>`).join("")}</div>`).join("");
+  }
+  function renderActsPanel() {
+    if (!isPC() || !S) return;
+    const box = $("#acts-panel");
+    if (!S.alive) { box.innerHTML = ""; return; }
+    const groups = B8.acts.groups(S);
+    const st = box.scrollTop;
+    box.innerHTML = groups.length ? actsHTML(groups) : `<p class="why">Пока ты слишком мал${S.sex === "f" ? "а" : ""} для дел. Расти!</p>`;
+    box.scrollTop = st;
+  }
+  $("#acts-panel").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]"); if (!b || b.disabled || !S || !S.alive) return;
+    sfx("click"); runAct(b.dataset.act);
   });
 
   // ═════ ход времени ═════
-  function nextYear() {
+  function paintTL() {
+    if (!S) return;
+    $("#tl-fill").style.width = Math.round(TL.t * 100) + "%";
+    const c = S;
+    const extra = c.jail && c.pr ? (c.pr.life ? " · ⛓ пожизненно" : " · ⛓ осталось " + ageWord(c.jail)) : c.fug ? " · 🚨 в бегах" : "";
+    const wait = !TL.run && !TL.skip && c.pend.length ? " · ждёт решение" : !TL.run && !TL.skip ? " · пауза" : "";
+    const lbl = `${c.born + c.age} · ${ageWord(c.age)}${extra}${wait}`;
+    if ($("#tl-lbl").textContent !== lbl) $("#tl-lbl").textContent = lbl;
+    $("#tl-play").textContent = TL.run || TL.skip ? "❚❚" : "▶";
+    $("#tl-play").classList.toggle("on", TL.run || TL.skip);
+    for (const b of $$("#timeline [data-sp]")) b.classList.toggle("on", TL.run && !TL.skip && +b.dataset.sp === TL.sp);
+    $("#tl-skip").classList.toggle("on", TL.skip);
+    $("#tl-back").disabled = !B8.canTimeMachine(c);
+    $("#timeline").classList.toggle("wait", !TL.run && !TL.skip && c.pend.length > 0);
+  }
+  function play(sp) { if (!S || !S.alive) return; TL.sp = sp || TL.sp; TL.run = true; TL.skip = false; M.set.spd = TL.sp; paintTL(); }
+  function pause() { TL.run = false; TL.skip = false; flushReveal(); paintTL(); }
+  function togglePlay() { if (TUT.active()) return; sfx("click"); if (TL.run || TL.skip) pause(); else { play(); if (S.pend.length && !TL.q.length) openDecision(); } }
+  function toggleSkip() { if (TUT.active() || !S || !S.alive) return; sfx("click"); if (TL.skip) { TL.skip = false; TL.run = true; } else { TL.skip = true; TL.run = false; flushReveal(); } paintTL(); }
+  function flushReveal() { if (!S) return; TL.q = []; TL.cap = S.log.length; renderLog(); }
+  $("#tl-play").onclick = togglePlay;
+  $("#tl-skip").onclick = toggleSkip;
+  $("#tl-back").onclick = () => { sfx("click"); if (B8.canTimeMachine(S)) openSub("timemachine"); };
+  for (const b of $$("#timeline [data-sp]")) b.onclick = () => { if (TUT.active()) return; sfx("click"); play(+b.dataset.sp); if (S.pend.length && !TL.q.length) openDecision(); };
+  $("#tl-bar").onclick = () => { if (S && S.pend.length && !UI.sheet) openDecision(); };
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = Math.min(120, now - TL.last); TL.last = now;
+    if (UI.screen !== "life" || !S || !S.alive || UI.sheet || TUT.active() || document.hidden) return;
+    if (!TL.run && !TL.skip) return;
+    if (TL.q.length) { let ch = false; while (TL.q.length && TL.q[0][1] <= TL.t) { TL.cap = TL.q.shift()[0] + 1; ch = true; } if (ch) renderLog(); }
+    if (!TL.q.length && S.pend.length && TL.t >= 0.12) { openDecision(); return; }
+    TL.t += dt / (TL.skip ? 230 : YEAR_MS / TL.sp);
+    if (TL.t >= 1) { TL.t = 0; nextYear(TL.skip); }
+    paintTL();
+  }
+  requestAnimationFrame(frame);
+  // прожить год: instant — показать все события сразу (кнопка «+ Год», перемотка)
+  function nextYear(instant) {
     if (!S || !S.alive || UI.sheet) return;
-    if (S.pend.length) { openDecision(); return; }
-    const dang = S.age;
+    if (S.pend.length) { flushReveal(); openDecision(); return; }
+    const dang = S.age, before = S.log.length;
     B8.advance(S);
     sfx(S.alive ? "year" : "death");
+    const n = S.log.length - before;
+    if (instant || n <= 1) { TL.cap = S.log.length; TL.q = []; }
+    else { TL.cap = before + 1; TL.q = []; for (let i = 1; i < n; i++) TL.q.push([before + i, 0.06 + (i / n) * 0.55]); }
     renderLife();
     for (const k of ACH_LIVE) checkAch(k);
-    if (!S.alive) { stopAuto(); save(true); setTimeout(() => endLife(), 900); return; }
+    if (!S.alive) { TL.run = false; TL.skip = false; flushReveal(); save(true); setTimeout(() => endLife(), 1100); return; }
     if (S.age % 5 === 0) save();
     TUT.ev("year", dang);
-    if (S.pend.length) setTimeout(openDecision, UI.auto ? 250 : 150);
+    if (instant && !TL.skip && S.pend.length) setTimeout(openDecision, 150);
   }
-  $("#btn-year").onclick = () => { sfx("click"); nextYear(); };
+  function manualYear() { if (!S || !S.alive || UI.sheet) return; sfx("click"); TL.t = 0; flushReveal(); nextYear(true); }
+  $("#btn-year").onclick = manualYear;
   $("#btn-acts").onclick = () => { sfx("click"); openActs(); TUT.ev("acts"); };
-  $("#btn-auto").onclick = () => { sfx("click"); UI.auto ? stopAuto() : startAuto(); TUT.ev("auto"); };
   $("#me").onclick = () => { sfx("click"); openProfile(); };
   $("#life-menu").onclick = () => { sfx("click"); openLifeMenu(); };
-  function startAuto() { if (!S || !S.alive) return; UI.auto = true; UI.autoPaused = false; renderLife(); autoTick(); }
-  function stopAuto(pause) { if (pause && UI.auto) { UI.autoPaused = true; return; } UI.auto = false; UI.autoPaused = false; clearTimeout(UI.autoT); if (UI.screen === "life" && S) { $("#btn-auto").classList.remove("on"); $("#btn-auto").textContent = "⏩"; } }
-  function resumeAuto() { if (UI.auto && UI.autoPaused) { UI.autoPaused = false; autoTick(); } }
-  function autoTick() {
-    clearTimeout(UI.autoT);
-    if (!UI.auto || UI.autoPaused) return;
-    const sp = [1300, 750, 380][M.set.speed != null ? M.set.speed : 1];
-    UI.autoT = setTimeout(() => { if (UI.auto && !UI.sheet && UI.screen === "life") nextYear(); if (UI.auto && !UI.autoPaused) autoTick(); }, sp);
-  }
 
   // ═════ решения ═════
   function openDecision() {
-    if (!S || !S.pend.length) return;
+    if (!S || !S.alive) return;
+    if (!B8.cleanPend(S)) { if (["result", "decision", "acts"].includes(UI.sheet)) closeSheet(); return; }
+    flushReveal();
     const v = B8.view(S, S.pend[0]);
     sfx("decide");
     const html = `<h2>${v.icon || "🔀"} ${esc(v.title)}</h2>${v.why ? `<div class="why">← ${esc(v.why)}</div>` : ""}<div class="dec-text">${esc(v.text)}</div>
-      <div class="opts">${v.opts.map((o) => `<button class="opt" data-i="${o.i}"><span>${esc(o.t)}${o.hint ? `<small>${esc(o.hint)}</small>` : ""}</span>${o.p != null ? `<span class="pc">${o.p}%</span>` : ""}</button>`).join("")}</div>`;
+      <div class="opts">${v.opts.map((o, n) => `<button class="opt" data-i="${o.i}"><span>${esc(o.t)}${o.hint || o.mg ? `<small>${esc(o.hint || "")}${o.mg ? " 🎮" : ""}</small>` : ""}</span>${o.p != null ? `<span class="pc">${o.p}%</span>` : isPC() ? `<span class="pc k">${n + 1}</span>` : ""}</button>`).join("")}</div>`;
     const card = sheet(html, "decision");
     card.onclick = (e) => {
       const b = e.target.closest("[data-i]");
       if (!b) return;
-      const r = B8.choose(S, +b.dataset.i);
+      const i = +b.dataset.i, o = v.opts.find((x) => x.i === i);
+      if (o && o.mg) { runMg(o.mg, card, (score) => resolve(i, { mg: score })); return; }
+      resolve(i);
+    };
+    function resolve(i, extra) {
+      UI.sheet = "decision";
+      const r = B8.choose(S, i, false, extra);
+      if (!r) { closeSheet(); return; }
       sfx(r.ok === false ? "bad" : r.ok ? "good" : "click");
       for (const k of ACH_LIVE) checkAch(k);
       TUT.ev("choice");
+      TL.cap = S.log.length;
       const kind = r.ok === false ? "b" : r.ok ? "g" : "";
-      card.innerHTML = `<h2>${v.icon || "🔀"} ${esc(v.title)}</h2>${r.text ? `<div class="res ${kind}">${esc(r.text)}</div>` : `<div class="res">Решение принято.</div>`}<button class="btn big primary" data-n="1">Дальше</button>`;
+      card.innerHTML = `<h2>${v.icon || "🔀"} ${esc(v.title)}</h2>${r.text ? `<div class="res ${kind}">${esc(r.text)}</div>` : `<div class="res">Решение принято.</div>`}<button class="btn big primary" data-n="1">Дальше${isPC() ? " <small>Enter</small>" : ""}</button>`;
       UI.sheet = "result";
       card.onclick = (ev) => {
         if (!ev.target.closest("[data-n]")) return;
-        if (!S.alive) { closeSheet(); stopAuto(); save(true); setTimeout(endLife, 500); return; }
-        if (S.pend.length) openDecision(); else closeSheet();
+        if (!S.alive) { closeSheet(); TL.run = false; save(true); setTimeout(endLife, 500); return; }
+        if (S.pend.length && B8.cleanPend(S)) openDecision(); else closeSheet();
       };
       save();
-    };
+    }
   }
-  function pushDecision(id, d) { const ok = B8.fire(S, id, d || {}); if (ok && S.pend.length) openDecision(); else { closeSheet(); } }
+  function runMg(kind, card, cb) {
+    UI.sheet = "mg";
+    card.className = "k-mg";
+    B8.mg.run(kind, card, (score, extra) => { cb(score, extra); }, { fmt: (s) => F(s) });
+  }
+  function pushDecision(id, d) { const ok = B8.fire(S, id, d || {}); if (ok && S.pend.length) openDecision(); else backToActs(); }
 
   // ═════ дела ═════
   function openActs() {
     if (!S || !S.alive) return;
+    if (isPC()) { if (UI.sheet) closeSheet(); renderActsPanel(); return; }
     const groups = B8.acts.groups(S);
-    if (!groups.length) { toast("Пока ты слишком мал[|а] для дел. Расти!".replace("[|а]", S.sex === "f" ? "а" : "")); return; }
-    const html = `<h2>📋 Дела <small style="color:var(--mut);font-weight:400">· ${ageWord(S.age)}</small></h2>` + groups.map(([t, items]) => `<h3>${esc(t)}</h3><div class="grid2">${items.map((it) =>
-      `<button class="act" data-act="${it.id}" ${it.ok ? "" : "disabled"}><span class="i">${it.icon}</span><span><b>${esc(B8.fmt(S, it.label))}</b><small>${esc(B8.fmt(S, it.ok ? it.hint || "" : it.why || it.hint || ""))}</small></span></button>`).join("")}</div>`).join("") +
-      `<div style="margin-top:1rem"><button class="btn big" data-close="1">Закрыть</button></div>`;
-    const card = sheet(html, "acts");
+    if (!groups.length) { toast(F("Пока ты слишком мал[|а] для дел. Расти!")); return; }
+    const card = sheet(`<h2>📋 Дела <small style="color:var(--mut);font-weight:400">· ${ageWord(S.age)}</small></h2>` + actsHTML(groups) + `<div style="margin-top:1rem"><button class="btn big" data-close="1">Закрыть</button></div>`, "acts");
     card.onclick = (e) => {
       if (e.target.closest("[data-close]")) { closeSheet(); return; }
       const b = e.target.closest("[data-act]");
@@ -335,19 +496,20 @@
       runAct(b.dataset.act);
     };
   }
+  function backToActs() { if (isPC()) { if (UI.sheet) closeSheet(); else renderLife(); } else openActs(); }
   function runAct(id) {
     if (id === "j_rew") {
-      P().rewarded(() => { S.flags.jail_ad = 1; S.jail = Math.max(1, S.jail - 1); B8.say(S, "Примерное поведение: срок сократили на год.", "g"); toast("Срок сокращён на год", "gold"); renderLife(); save(); }, () => openActs());
+      P().rewarded(() => { S.flags.jail_ad = 1; S.jail = Math.max(1, S.jail - 1); B8.say(S, "Примерное поведение: срок сократили на год.", "g"); toast("Срок сокращён на год", "gold"); renderLife(); save(); }, () => backToActs());
       return;
     }
     const r = B8.acts.run(S, id);
     if (r.open) return openSub(r.open);
-    afterAct(r);
-    openActs();
+    if (!afterAct(r)) backToActs();
   }
   function afterAct(r) {
     if (r && r.text) { toast(esc(r.text), r.kind); sfx(r.kind === "g" ? "good" : r.kind === "b" ? "bad" : "click"); }
     for (const k of ACH_LIVE) checkAch(k);
+    TL.cap = S.log.length; TL.q = [];
     renderLife();
     save();
     if (!S.alive) { closeSheet(); setTimeout(endLife, 600); return true; }
@@ -356,29 +518,35 @@
   }
   function openSub(what) {
     const c = S, gdp = B8.gdp(c);
-    const back = `<button class="btn big" data-back="1" style="margin-top:0.8rem">← Назад к делам</button>`;
-    const wire = (card, fn) => { card.onclick = (e) => { if (e.target.closest("[data-back]")) { sfx("click"); openActs(); return; } fn(e); }; };
+    const back = `<button class="btn big" data-back="1" style="margin-top:0.8rem">← Назад${isPC() ? "" : " к делам"}</button>`;
+    const wire = (card, fn) => { card.onclick = (e) => { if (e.target.closest("[data-back]")) { sfx("click"); backToActs(); return; } fn(e); }; };
+    if (what.startsWith("decide:")) return pushDecision(what.slice(7));
+    if (what === "mg:dig") {
+      const card = sheet("", "mg");
+      return B8.mg.run("dig", card, (score, noise) => { const r = B8.prison.dig(S, score, noise); if (!afterAct(r)) backToActs(); }, { fmt: (s) => F(s) });
+    }
+    if (what === "f_poster") return openPoster();
     if (["dating", "propose", "divorce", "baby", "adopt", "cancer"].includes(what)) { c.ya[what] = 1; return pushDecision("act_" + what); }
     if (what === "focus") {
       const set = B8.focusSet(c);
-      wire(sheet(`<h2>🎯 Фокус года</h2><p class="why">На что ты тратишь свободное время в этом году. Действует, пока не сменишь.</p><div class="opts">${set.map(([k, l, h]) => `<button class="opt" data-f="${k}"><span>${esc(l)}<small>${esc(h)}</small></span>${c.focus === k ? '<span class="pc">сейчас</span>' : ""}</button>`).join("")}</div>${back}`, "focus"), (e) => {
+      wire(sheet(`<h2>🎯 Фокус года</h2><p class="why">На что ты тратишь время в этом году. Его можно менять и сверху, над летописью.</p><div class="opts">${set.map(([k, l, h]) => `<button class="opt" data-f="${k}"><span>${esc(l)}<small>${esc(h)}</small></span>${c.focus === k ? '<span class="pc">сейчас</span>' : ""}</button>`).join("")}</div>${back}`, "focus"), (e) => {
         const b = e.target.closest("[data-f]"); if (!b) return;
-        c.focus = b.dataset.f; sfx("good"); toast("Фокус: " + esc(set.find((x) => x[0] === c.focus)[1])); TUT.ev("focus"); openActs();
+        setFocus(b.dataset.f); backToActs();
       });
       return;
     }
     if (what === "jobs") {
       const offers = B8.jobOffers(c);
-      wire(sheet(`<h2>🔎 Вакансии</h2>${offers.length ? "" : "<p>Подходящих вакансий нет. Нужно образование.</p>"}<div class="opts">${offers.map((o, i) => {
-        const F = B8.FIELDS[o.f], pay = gdp * B8.JOB_MULT[o.lvl] * F[2] * (0.6 + c.iq / 125) * (c.urban ? 1 : 0.7);
-        return `<button class="opt" data-j="${i}"><span>${esc(B8.fmt(c, F[3][o.lvl - 1]))}<small>${esc(F[0])} · около ${money(pay)} в год</small></span><span class="pc">${Math.round(Math.min(95, 45 + c.iq / 3 + c.sk / 4))}%</span></button>`;
+      wire(sheet(`<h2>🔎 Вакансии</h2>${offers.length ? "" : `<p>Подходящих вакансий нет.${c.crime.rec ? " Судимость закрывает многие двери." : " Нужно образование."}</p>`}<div class="opts">${offers.map((o, i) => {
+        const Fd = B8.FIELDS[o.f], pay = gdp * B8.JOB_MULT[o.lvl] * Fd[2] * (0.6 + c.iq / 125) * (c.urban ? 1 : 0.7);
+        return `<button class="opt" data-j="${i}"><span>${esc(F(Fd[3][o.lvl - 1]))}<small>${esc(Fd[0])} · около ${money(pay)} в год</small></span><span class="pc">${Math.round(Math.min(95, 45 + c.iq / 3 + c.sk / 4 - (c.crime.rec ? 15 : 0)))}%</span></button>`;
       }).join("")}</div>${back}`, "jobs"), (e) => {
         const b = e.target.closest("[data-j]"); if (!b) return;
         c.ya.jobs = 1;
         const o = offers[+b.dataset.j];
-        if (R.r(c) < Math.min(0.95, (45 + c.iq / 3 + c.sk / 4) / 100)) { B8.takeJob(c, o.f, o.lvl); afterAct({ text: B8.fmt(c, "Тебя взяли! Новая работа: {job}."), kind: "g" }); }
+        if (R.r(c) < Math.min(0.95, (45 + c.iq / 3 + c.sk / 4 - (c.crime.rec ? 15 : 0)) / 100)) { B8.takeJob(c, o.f, o.lvl); afterAct({ text: F("Тебя взяли! Новая работа: {job}."), kind: "g" }); }
         else { B8.say(c, "Собеседование не прошло. «Мы вам перезвоним».", "b"); afterAct({ text: "Не взяли. «Мы вам перезвоним».", kind: "b" }); }
-        openActs();
+        backToActs();
       });
       return;
     }
@@ -390,7 +558,7 @@
         const abroad = b.dataset.u === "abroad", p = abroad ? Math.min(0.85, c.iq * 0.007) : Math.min(0.92, 0.2 + c.iq * 0.008);
         if (R.r(c) < p) { c.uni = { y: 0, t: 3, abroad }; if (c.job) c.job = null; c.flags.path = 1; B8.say(c, abroad ? "Ты поступил[|а] в университет за границей!" : "Ты поступил[|а] в университет!", "g", "", true); afterAct({ text: "Поступление! Ты студент" + (c.sex === "f" ? "ка" : "") + ".", kind: "g" }); }
         else { B8.say(c, "Не хватило баллов для поступления.", "b"); afterAct({ text: "Не поступил" + (c.sex === "f" ? "а" : "") + ". Можно попробовать в следующем году.", kind: "b" }); }
-        openActs();
+        backToActs();
       });
       return;
     }
@@ -398,14 +566,14 @@
       const price = gdp * (c.urban ? 6 : 3) * (1 + c.ls * 0.25);
       wire(sheet(`<h2>🏠 Своё жильё</h2><p>Цена — около ${money(price)}.</p><div class="opts"><button class="opt" data-h="cash" ${c.money >= price ? "" : "disabled"}><span>Купить сразу</span></button><button class="opt" data-h="mort" ${c.money >= price * 0.2 ? "" : "disabled"}><span>Ипотека на 20 лет<small>первый взнос ${money(price * 0.2)}</small></span></button></div>${back}`, "home"), (e) => {
         const b = e.target.closest("[data-h]"); if (!b || b.disabled) return;
-        c.ya.home = 1; afterAct(B8.acts.mortgage(c, b.dataset.h === "cash")); openActs();
+        c.ya.home = 1; if (!afterAct(B8.acts.mortgage(c, b.dataset.h === "cash"))) backToActs();
       });
       return;
     }
     if (what === "invest") {
       wire(sheet(`<h2>📊 Инвестиции</h2><p>Сейчас вложено: ${money(c.inv)}. В среднем фонды растут на 5–8% в год, но бывают обвалы.</p><div class="opts">${[0.1, 0.3, 0.6, 0.9].map((x) => `<button class="opt" data-p="${x}"><span>Вложить ${Math.round(x * 100)}% денег</span><span class="pc">${money(c.money * x)}</span></button>`).join("")}</div>${back}`, "invest"), (e) => {
         const b = e.target.closest("[data-p]"); if (!b) return;
-        c.ya.invest = 1; afterAct(B8.acts.invest(c, +b.dataset.p)); openActs();
+        c.ya.invest = 1; if (!afterAct(B8.acts.invest(c, +b.dataset.p))) backToActs();
       });
       return;
     }
@@ -418,10 +586,9 @@
       return;
     }
     if (what === "timemachine") {
-      const ad = P() && P().hasAds();
-      wire(sheet(`<h2>⏳ Машина времени</h2><p>Раз за жизнь можно вернуться на 5 лет назад и прожить их иначе. Всё, что случилось за эти годы, исчезнет.</p><div class="opts"><button class="btn big primary" data-t="go">Вернуться на 5 лет назад</button></div>${back}`, "tm"), (e) => {
+      wire(sheet(`<h2>⏳ Машина времени</h2><p>Раз за жизнь можно вернуться на 5 лет назад и прожить их иначе. Всё, что случилось за эти годы, исчезнет.</p><div class="opts"><button class="btn big primary" data-t="go">⏪ Вернуться на 5 лет назад</button></div>${back}`, "tm"), (e) => {
         if (!e.target.closest("[data-t]")) return;
-        S = B8.timeMachine(S); UI.logShown = 0; sfx("win"); closeSheet(); renderLife(true); checkAch("tm"); save(true);
+        S = B8.timeMachine(S); UI.logShown = 0; TL.t = 0; sfx("win"); closeSheet(); renderLife(true); checkAch("tm"); save(true);
       });
       return;
     }
@@ -436,23 +603,22 @@
     const c = S, ks = B8.biz.kinds(c);
     const card = sheet(`<h2>🏪 Открыть бизнес</h2><p class="why">Стартовый капитал зависит от вида. Бизнес растёт, если ты им занимаешься. Может и прогореть.</p><div class="opts">${ks.map((k) => `<button class="opt" data-k="${k.id}" ${c.money >= k.cap ? "" : "disabled"}><span>${esc(k.n[0].toUpperCase() + k.n.slice(1))}</span><span class="pc">${money(k.cap)}</span></button>`).join("")}</div><button class="btn big" data-back="1" style="margin-top:0.8rem">← Назад</button>`, "bizopen");
     card.onclick = (e) => {
-      if (e.target.closest("[data-back]")) return openActs();
+      if (e.target.closest("[data-back]")) return backToActs();
       const b = e.target.closest("[data-k]"); if (!b || b.disabled) return;
       afterAct(B8.biz.open(c, b.dataset.k)); checkAch("biz"); openBiz();
     };
   }
   function openBiz() {
     const c = S, b = c.biz;
-    if (!b) return openActs();
+    if (!b) return backToActs();
     const acts = B8.biz.acts(c);
-    const card = sheet(`<h2>🏢 ${esc(b.name)}</h2><div class="kv"><span>Вид</span><span>${esc(b.kind)}</span></div><div class="kv"><span>Уровень</span><span>${esc(B8.biz.LVL[b.lvl])}</span></div>
-      <div class="kv"><span>Стоимость</span><span>${money(b.val)}</span></div><div class="kv"><span>Прибыль за прошлый год</span><span class="${b.profit >= 0 ? "win" : "loss"}">${money(b.profit)}</span></div><div class="kv"><span>Лет бизнесу</span><span>${b.y}</span></div><div class="kv"><span>Управляющий</span><span>${b.mgr ? "есть" : "ты сам[|а]".replace("[|а]", c.sex === "f" ? "а" : "")}</span></div>
+    const card = sheet(`<h2>🏢 ${esc(b.name)}</h2>${kv("Вид", esc(b.kind))}${kv("Уровень", esc(B8.biz.LVL[b.lvl]))}${kv("Стоимость", money(b.val))}${kv("Прибыль за прошлый год", `<span class="${b.profit >= 0 ? "win" : "loss"}">${money(b.profit)}</span>`)}${kv("Лет бизнесу", b.y)}${kv("Управляющий", b.mgr ? "есть" : F("ты сам[|а]"))}
       <h3>Что сделать в этом году</h3><div class="opts">${acts.map((a) => `<button class="opt" data-b="${a.id}" ${a.ok && !c.ya["biz_" + a.id] ? "" : "disabled"}><span>${esc(a.label)}</span></button>`).join("")}</div><button class="btn big" data-back="1" style="margin-top:0.8rem">← Назад</button>`, "biz");
     card.onclick = (e) => {
-      if (e.target.closest("[data-back]")) return openActs();
+      if (e.target.closest("[data-back]")) return backToActs();
       const x = e.target.closest("[data-b]"); if (!x || x.disabled) return;
       const r = B8.biz.act(c, x.dataset.b); afterAct(r); checkAch("biz");
-      if (c.biz) openBiz(); else openActs();
+      if (c.biz) openBiz(); else backToActs();
     };
   }
 
@@ -463,13 +629,13 @@
     if (!acc.ok) { toast(esc(acc.why)); return; }
     if (acc.list.length === 1) return enterCasino(acc.list[0]);
     const card = sheet(`<h2>🎰 Казино</h2>${acc.note ? `<p class="why">${esc(acc.note)}</p>` : ""}<div class="opts">${acc.list.map((p, i) => `<button class="opt" data-p="${i}" ${c.money >= p.cost ? "" : "disabled"}><span>${esc(p.label)}${p.risk ? "<small>может нагрянуть полиция</small>" : ""}</span>${p.cost ? `<span class="pc">${money(p.cost)}</span>` : ""}</button>`).join("")}</div><button class="btn big" data-back="1" style="margin-top:0.8rem">← Назад</button>`, "casplace");
-    card.onclick = (e) => { if (e.target.closest("[data-back]")) return openActs(); const b = e.target.closest("[data-p]"); if (!b || b.disabled) return; enterCasino(acc.list[+b.dataset.p]); };
+    card.onclick = (e) => { if (e.target.closest("[data-back]")) return backToActs(); const b = e.target.closest("[data-p]"); if (!b || b.disabled) return; enterCasino(acc.list[+b.dataset.p]); };
   }
   function enterCasino(place) {
     const r = B8.casino.enter(S, place);
-    if (r.raid) { sfx("siren"); afterAct({ text: r.text, kind: "b" }); return openActs(); }
+    if (r.raid) { sfx("siren"); if (!afterAct({ text: r.text, kind: "b" })) backToActs(); return; }
     CAS.bj = null; CAS.bet = B8.casino.bets(S)[0] || 0;
-    renderCasino("Добро пожаловать! Ставки сделаны на игровые деньги — других здесь нет.");
+    renderCasino("Добро пожаловать! Ставки — только на игровые деньги, других здесь нет.");
   }
   function renderCasino(msg, res) {
     const c = S, bets = B8.casino.bets(c);
@@ -507,13 +673,13 @@
     const c = S, t = e.target;
     const g = t.closest("[data-g]"); if (g) { CAS.game = g.dataset.g; CAS.bj = null; CAS.pick = null; sfx("click"); return renderCasino(); }
     const bt = t.closest("[data-bet]"); if (bt) { CAS.bet = +bt.dataset.bet; sfx("click"); return renderCasino(); }
-    if (t.closest("[data-leave]")) { const r = B8.casino.leave(c); checkAch("cas"); afterAct(r ? { text: r.text, kind: r.diff > 0 ? "g" : r.diff < 0 ? "b" : "" } : null); return openActs(); }
+    if (t.closest("[data-leave]")) { const r = B8.casino.leave(c); checkAch("cas"); if (!afterAct(r ? { text: r.text, kind: r.diff > 0 ? "g" : r.diff < 0 ? "b" : "" } : null)) backToActs(); return; }
     const bet = CAS.bet;
     if (!bet || bet > c.money) return;
     const fin = (win, txt) => { sfx(win > 0 ? "win" : win < 0 ? "lose" : "click"); checkAch("cas"); return `${txt} ${win > 0 ? `<span class="win">+${money(win)}</span>` : win < 0 ? `<span class="loss">−${money(-win)}</span>` : "ставка возвращена"}`; };
     const r = t.closest("[data-r]");
     if (r) {
-      let kind = r.dataset.r, val = r.dataset.v != null ? +r.dataset.v : 0;
+      const kind = r.dataset.r, val = r.dataset.v != null ? +r.dataset.v : 0;
       if (kind === "num" && r.dataset.v == null) { CAS.pick = "num"; return renderCasino("Выбери число от 0 до 36."); }
       if (kind === "dozen" && r.dataset.v == null) { CAS.pick = "dozen"; return renderCasino("Выбери дюжину."); }
       CAS.pick = null;
@@ -525,7 +691,7 @@
     if (t.closest("[data-s]")) {
       const res = B8.casino.slots(c, bet);
       CAS.busy = true; let i = 0;
-      const spin = setInterval(() => { sfx("tick"); const fake = [0, 1, 2].map((j) => (i > 6 + j * 3 ? res.r[j] : R.pick(S, B8.casino.SYM))); renderCasino("…", { r: fake }); if (++i > 14) { clearInterval(spin); CAS.busy = false; renderCasino(fin(res.win, res.mult >= 30 ? "ДЖЕКПОТ!" : res.mult ? "Есть совпадение!" : "Мимо."), res); } }, 80);
+      const spin = setInterval(() => { sfx("tick"); const fake = [0, 1, 2].map((j) => (i > 6 + j * 3 ? res.r[j] : B8.casino.SYM[Math.floor(Math.random() * 6)])); renderCasino("…", { r: fake }); if (++i > 14) { clearInterval(spin); CAS.busy = false; renderCasino(fin(res.win, res.mult >= 30 ? "ДЖЕКПОТ!" : res.mult ? "Есть совпадение!" : "Мимо."), res); } }, 80);
       return;
     }
     const d = t.closest("[data-d]");
@@ -542,8 +708,8 @@
       if (a === "deal") CAS.bj = B8.casino.bjStart(c, bet);
       else if (a === "hit") CAS.bj = B8.casino.bjHit(c, CAS.bj);
       else CAS.bj = B8.casino.bjEnd(c, CAS.bj);
-      const g = CAS.bj;
-      if (g.done) return renderCasino(fin(g.win, { bj: "Блэкджек!", win: "Победа!", push: "Ничья.", lose: "Дилер сильнее.", bust: "Перебор!" }[g.res]));
+      const g2 = CAS.bj;
+      if (g2.done) return renderCasino(fin(g2.win, { bj: "Блэкджек!", win: "Победа!", push: "Ничья.", lose: "Дилер сильнее.", bust: "Перебор!" }[g2.res]));
       return renderCasino("Ещё карту или хватит?");
     }
   }
@@ -552,25 +718,116 @@
   function openCrime() {
     const c = S, cr = c.crime, ops = B8.crime.opsFor(c);
     const left = 3 - (c.ya.crime || 0);
-    const head = cr.on ? `<div class="kv"><span>Организация</span><span>${esc(cr.orgName)}</span></div><div class="kv"><span>Положение</span><span>${esc(B8.crime.rankTitle(c))}</span></div>`
-      : `<p class="why">Ты пока сам[|а] по себе. Вступить в организацию можно, если там тебя заметят: нужна репутация.</p>`.replace("[|а]", c.sex === "f" ? "а" : "");
-    const rep = Math.min(100, cr.rep / 6);
+    const head = cr.on ? kv("Организация", esc(cr.orgName)) + kv("Положение", esc(B8.crime.rankTitle(c))) : `<p class="why">${F("Ты пока сам[|а] по себе. В организацию позовут, если там тебя заметят: нужна репутация.")}</p>`;
+    const canHeist = c.age >= 18 && !c.ya.heist && left >= 2;
     const card = sheet(`<h2>🕶 Тёмные дела</h2>${head}
-      <div class="why">Репутация в подполье: ${Math.round(cr.rep)}</div><div class="meter"><i style="width:${rep}%;background:var(--pur)"></i></div>
-      <div class="why">Внимание полиции: ${Math.round(cr.heat)}%</div><div class="meter"><i style="width:${cr.heat}%;background:var(--bad)"></i></div>
-      ${cr.rec ? `<div class="why">Судимостей: ${cr.rec}</div>` : ""}
+      ${meter("Репутация в подполье", Math.min(100, cr.rep / 6), "var(--pur)", Math.round(cr.rep))}
+      ${meter("🧾 Улики — копятся годами", cr.ev || 0, "#ff9f43")}
+      ${meter("🚓 Внимание полиции", cr.heat, "var(--bad)")}
+      ${cr.rec ? `<div class="why">Судимостей: ${cr.rec}. С каждой новой срок больше.</div>` : ""}
+      ${c.age >= 18 ? `<button class="heist-btn" data-heist="1" ${canHeist ? "" : "disabled"}><span>🎯</span><span><b>Ограбление</b><small>${canHeist ? "команда, план, взлом и погоня" : c.ya.heist ? "одно ограбление в год" : "нужно 2 свободных дела в этом году"}</small></span></button>` : ""}
       <h3>Что провернуть (осталось в этом году: ${Math.max(0, left)})</h3>
-      <div class="opts">${ops.map((o) => `<button class="opt" data-o="${o.id}" ${left > 0 ? "" : "disabled"}><span>${esc(o.label)}${o.cost ? `<small>нужно ${money(o.cost)}</small>` : o.risk >= 0.2 ? "<small>очень рискованно</small>" : ""}</span>${["bribe", "launder", "low", "quit"].includes(o.id) ? "" : `<span class="pc">${o.p}%</span>`}</button>`).join("")}</div>
+      <div class="opts">${ops.map((o) => `<button class="opt" data-o="${o.id}" ${left > 0 ? "" : "disabled"}><span>${esc(o.label)}${o.cost ? `<small>нужно ${money(o.cost)}</small>` : o.id === "car" ? "<small>мини-игра 🎮</small>" : o.risk >= 0.2 ? "<small>очень рискованно</small>" : ""}</span>${["bribe", "launder", "low", "quit"].includes(o.id) ? "" : `<span class="pc">${o.p}%</span>`}</button>`).join("")}</div>
       <p class="why" style="margin-top:0.7rem">Это игра. В жизни за такое сажают, а «особые бананы» — не бананы.</p>
       <button class="btn big" data-back="1">← Назад</button>`, "crime");
     card.onclick = (e) => {
-      if (e.target.closest("[data-back]")) return openActs();
+      if (e.target.closest("[data-back]")) return backToActs();
+      if (e.target.closest("[data-heist]")) { if (canHeist) openHeist(); return; }
       const b = e.target.closest("[data-o]"); if (!b || b.disabled) return;
-      const r = B8.crime.doOp(c, b.dataset.o);
+      const id = b.dataset.o;
+      if (id === "car") { runMg("lock", card, (score) => { const r = B8.crime.doOp(c, "car", { mg: score }); checkAch("crime"); if (!afterAct(r)) openCrime(); }); return; }
+      const r = B8.crime.doOp(c, id);
       checkAch("crime");
       if (afterAct(r)) return;
       openCrime();
     };
+  }
+
+  // ── ограбление: цель → команда → план → осложнения → хранилище → погоня ──
+  const HS = {};
+  function openHeist() {
+    const c = S, ts = B8.heist.targets(c);
+    HS.crew = null; HS.picks = {}; HS.h = null;
+    const card = sheet(`<h2>🎯 Ограбление</h2><p class="why">Чем крупнее цель — тем больше добыча, улики и срок, если поймают.</p><div class="opts">${ts.map((t) => `<button class="opt" data-t="${t.id}" ${t.ok ? "" : "disabled"}><span>${esc(t.n)}<small>${t.ok ? "добыча " + money(t.loot[0]) + " – " + money(t.loot[1]) : esc(t.why)}</small></span><span class="pc">${"★".repeat(t.tier)}</span></button>`).join("")}</div><button class="btn big" data-back="1" style="margin-top:0.8rem">← Назад</button>`, "heist");
+    card.onclick = (e) => {
+      if (e.target.closest("[data-back]")) return openCrime();
+      const b = e.target.closest("[data-t]"); if (!b || b.disabled) return;
+      sfx("click"); HS.tid = b.dataset.t; HS.crew = B8.heist.crew(c); heistCrew();
+    };
+  }
+  function heistCrew() {
+    const c = S, R0 = B8.heist.ROLES;
+    for (const [r] of R0) if (HS.picks[r] == null) HS.picks[r] = -1;
+    const cut = R0.reduce((s, [r]) => s + (HS.picks[r] >= 0 ? HS.crew[r][HS.picks[r]].cut : 0), 0);
+    const card = sheet(`<h2>🎯 Команда</h2><p class="why">Каждый берёт свою долю. Без кого-то можно обойтись — но рискованнее. Кто-то может оказаться болтуном.</p>
+      ${R0.map(([r, ic, lbl]) => `<h3>${ic} ${lbl}</h3><div class="crew">${HS.crew[r].map((m, i) => `<button class="cm ${HS.picks[r] === i ? "on" : ""}" data-r="${r}" data-i="${i}"><b>${esc(m.n)}</b><span class="sk">${"★".repeat(m.sk)}${"☆".repeat(5 - m.sk)}</span><small>${esc(m.tr)}</small><em>доля ${m.cut}%</em></button>`).join("")}<button class="cm none ${HS.picks[r] === -1 ? "on" : ""}" data-r="${r}" data-i="-1"><b>Без ${r === "inside" ? "своего человека" : lbl === "Хакер" ? "хакера" : lbl === "Водитель" ? "водителя" : "громилы"}</b><small>справлюсь сам${c.sex === "f" ? "а" : ""}</small></button></div>`).join("")}
+      <div class="kv"><span>Доля команды</span><span>${cut}%</span></div>
+      <button class="btn big primary" data-next="1" style="margin-top:0.6rem">Дальше: план</button><button class="btn big" data-back="1" style="margin-top:0.4rem">← К целям</button>`, "heist");
+    card.onclick = (e) => {
+      if (e.target.closest("[data-back]")) return openHeist();
+      if (e.target.closest("[data-next]")) { sfx("click"); return heistPlan(); }
+      const b = e.target.closest("[data-r]"); if (!b) return;
+      sfx("click"); HS.picks[b.dataset.r] = +b.dataset.i; heistCrew();
+    };
+  }
+  function heistPlan() {
+    const c = S, cost = B8.heist.scoutCost(c, HS.tid);
+    HS.ap = HS.ap || "quiet"; if (HS.scout == null) HS.scout = c.money >= cost;
+    const ap = (id, ic, t, h) => `<button class="opt ${HS.ap === id ? "sel" : ""}" data-ap="${id}"><span>${ic} ${t}<small>${h}</small></span>${HS.ap === id ? '<span class="pc">✓</span>' : ""}</button>`;
+    const card = sheet(`<h2>🎯 План</h2><div class="opts">${ap("quiet", "🤫", "Тихо", "важнее хакер и свой человек; меньше улик")}${ap("loud", "💥", "Громко", "важнее громила и водитель")}${ap("smart", "🎭", "Хитро", "важнее твой ум и обаяние")}</div>
+      <h3>Разведка</h3><button class="opt ${HS.scout ? "sel" : ""}" data-sc="1" ${c.money >= cost ? "" : "disabled"}><span>🔍 Тщательная разведка<small>+10% к каждому шансу · ${money(cost)}</small></span><span class="pc">${HS.scout ? "✓" : ""}</span></button>
+      <button class="btn big primary" data-go="1" style="margin-top:0.8rem">Начать дело</button><button class="btn big" data-back="1" style="margin-top:0.4rem">← Команда</button>`, "heist");
+    card.onclick = (e) => {
+      if (e.target.closest("[data-back]")) return heistCrew();
+      const a = e.target.closest("[data-ap]"); if (a) { sfx("click"); HS.ap = a.dataset.ap; return heistPlan(); }
+      const s = e.target.closest("[data-sc]"); if (s && !s.disabled) { sfx("click"); HS.scout = !HS.scout; return heistPlan(); }
+      if (e.target.closest("[data-go]")) { sfx("decide"); HS.h = B8.heist.begin(c, HS.tid, HS.crew, HS.picks, HS.ap, HS.scout && c.money >= cost); heistStep(""); }
+    };
+  }
+  function heistStep(prev) {
+    const c = S, h = HS.h, v = B8.heist.view(c, h);
+    const alarm = `<div class="alarm">${[0, 1, 2].map((i) => `<i class="${i < h.alarm ? "on" : ""}"></i>`).join("")}<span>тревога</span></div>`;
+    if (v.stage === "done") return heistEnd();
+    if (v.stage === "vault") {
+      const card = sheet(`<h2>🎯 ${esc(h.name)}</h2>${prev ? `<div class="res">${esc(prev)}</div>` : ""}${alarm}<p>Вы у хранилища. Дальше — твои руки.</p><button class="btn big primary" data-v="1">🔓 Взломать замок</button>`, "heist");
+      card.onclick = (e) => { if (!e.target.closest("[data-v]")) return; runMg("lock", card, (score) => { const r = B8.heist.vault(c, h, score); UI.sheet = "heist"; heistStep(r.text); }); };
+      return;
+    }
+    const title = v.stage === "comp" ? `Этап ${v.step} из ${v.of}` : "Погоня";
+    const card = sheet(`<h2>🎯 ${esc(h.name)} · ${title}</h2>${prev ? `<div class="res">${esc(prev)}</div>` : ""}${alarm}<div class="dec-text">${esc(v.text)}</div>
+      <div class="opts">${v.opts.map((o, i) => `<button class="opt" data-i="${i}"><span>${esc(o.t)}${o.role ? `<small>${roleTag(h, o.role)}</small>` : ""}</span><span class="pc">${o.p}%</span></button>`).join("")}</div>`, "heist");
+    card.onclick = (e) => {
+      const b = e.target.closest("[data-i]"); if (!b) return;
+      const r = B8.heist.act(c, h, +b.dataset.i);
+      sfx(r.ok ? "good" : "bad");
+      heistStep(r.text);
+    };
+  }
+  function roleTag(h, r) { const m = h.crew[r], nm = { hacker: "хакер", driver: "водитель", muscle: "громила", inside: "свой человек" }[r]; return m ? `${nm}: ${esc(m.n.split(" ")[0])} ${"★".repeat(m.sk)}` : `${nm} — нет, шанс ниже`; }
+  function heistEnd() {
+    const c = S, h = HS.h, r = B8.heist.finish(c, h);
+    M.st.heists = (M.st.heists || 0) + (r.ok ? 1 : 0);
+    for (const k of ACH_LIVE) checkAch(k);
+    sfx(r.ok ? "win" : "siren");
+    const card = sheet(`<h2>🎯 ${esc(h.name)}</h2><div class="res">${esc(h.lines[h.lines.length - 1] || "")}</div>
+      <div class="res ${r.ok ? "g" : "b"}">${r.ok ? `Удалось! Твоя доля: <b>${money(r.sum)}</b>. Улики выросли — их теперь ${Math.round(c.crime.ev)}%.` : "Тебя взяли на месте. Дальше — СИЗО."}</div>
+      <button class="btn big primary" data-n="1">Дальше</button>`, "heist");
+    card.onclick = (e) => { if (!e.target.closest("[data-n]")) return; closeSheet(); TL.cap = S.log.length; renderLife(); save(); if (!S.alive) setTimeout(endLife, 400); else if (S.pend.length) setTimeout(openDecision, 150); };
+  }
+
+  // ── плакат и газеты ──
+  function openPoster() {
+    const card = sheet(`<button class="ico close" data-close="1">✕</button><h2>🚨 Плакат «Разыскивается»</h2><canvas id="poster-cv" width="320" height="420" class="poster"></canvas><p class="why">${S.fug ? F("Такие плакаты висят на вокзалах и остановках. Розыск снижается, если залечь, сменить документы или лицо.") : ""}</p>`, "poster");
+    B8.drawPoster($("#poster-cv"), S);
+    card.onclick = (e) => { if (e.target.closest("[data-close]")) backToActs(); };
+  }
+  function papersHTML(c, n) {
+    const list = (c.paper || []).slice(-(n || 40)).reverse();
+    return list.length ? list.map(([a, h, name]) => `<div class="np clip"><small>📰 ${esc(name)} · ${c.born + a}</small><b>${esc(h)}</b></div>`).join("") : `<p class="why">Газеты о тебе пока не писали.</p>`;
+  }
+  function openPapers() {
+    const card = sheet(`<button class="ico close" data-close="1">✕</button><h2>📰 Газеты о тебе</h2>${papersHTML(S)}`, "papers");
+    card.onclick = (e) => { if (e.target.closest("[data-close]")) closeSheet(); };
   }
 
   // ═════ профиль ═════
@@ -582,45 +839,48 @@
     if (c.date) ppl.push(p(c.date, "встречаетесь"));
     c.kids.forEach((k) => ppl.push(p(k, (k.sex === "m" ? "сын" : "дочь") + (k.adopted ? " (приёмн" + (k.sex === "m" ? "ый" : "ая") + ")" : ""))));
     if (c.friend) ppl.push(p(c.friend, "друг"));
+    for (const pt of c.pets || []) ppl.push(`<div class="person ${pt.alive ? "" : "dead"}"><span>${B8.pets.PK[pt.k][1]} ${esc(pt.n)}<br><small>${B8.pets.PK[pt.k][0]}</small></span><span>${pt.alive ? ageWord(c.age - pt.born) : "† " + ageWord(pt.died)}</span></div>`);
     const a = [];
     if (c.a.home) a.push("жильё (" + money(c.a.homeVal) + (c.a.mort ? ", ипотека ещё " + c.a.mort + " " + B8.years(c.a.mort) : "") + ")");
     if (c.a.mansion) a.push("особняк"); if (c.a.car) a.push(c.a.car >= 2 ? "спорткар" : "машина"); if (c.a.yacht) a.push("яхта");
     if (c.inv) a.push("инвестиции " + money(c.inv)); if (c.biz) a.push("бизнес «" + c.biz.name + "» (" + money(c.biz.val) + ")");
     const conds = { depression: "депрессия", diabetes: "диабет", back: "больная спина", cancer: "онкология", drinking: "алкоголь", gambling: "игровая зависимость", hungry: "недоедание", unemployed: "безработица" };
+    const pr = c.pr, fg = c.fug;
     const card = sheet(`<button class="ico close" data-close="1">✕</button><h2>${esc(B8.fullName(c))}</h2>
       ${c.patr ? `<div class="why">отчество: ${esc(c.patr)}</div>` : ""}
-      <div class="kv"><span>Возраст</span><span>${ageWord(c.age)} (${c.born + c.age} год)</span></div>
-      <div class="kv"><span>Где живёшь</span><span>${esc(c.house)}, ${esc(c.city)}</span></div>
-      <div class="kv"><span>Уровень жизни</span><span>${esc(B8.LS[c.ls])}</span></div>
-      <div class="kv"><span>Место в мире</span><span>богаче ${B8.percentile(c)}% людей</span></div>
-      <div class="kv"><span>Образование</span><span>${esc(B8.EDU[c.edu])}${c.uni ? " (учишься)" : c.school ? " (школа)" : ""}</span></div>
-      <div class="kv"><span>Работа</span><span>${esc(B8.jobTitle(c))}</span></div>
-      <div class="kv"><span>Доход в год</span><span>${money(c.income)}</span></div>
-      <div class="kv"><span>Состояние</span><span>${money(B8.netWorth(c))}</span></div>
-      ${c.temper ? `<div class="kv"><span>Характер</span><span>${esc(B8.TEMPERS[c.temper][c.sex === "m" ? 0 : 1])}</span></div>` : ""}
-      ${c.hobby ? `<div class="kv"><span>Увлечение</span><span>${esc(B8.HOBBIES[c.hobby][0])} (${Math.round(c.hobbyL)}/100)</span></div>` : ""}
-      <div class="kv"><span>Внешность</span><span>${Math.round(c.looks)}/100</span></div>
-      ${Object.keys(c.conds).length ? `<div class="kv"><span>Здоровье</span><span>${Object.keys(c.conds).map((k) => conds[k] || k).join(", ")}</span></div>` : ""}
-      ${c.crime.on || c.crime.rec ? `<div class="kv"><span>Подполье</span><span>${c.crime.on ? esc(B8.crime.rankTitle(c)) : "в прошлом"}${c.crime.rec ? ", судимостей: " + c.crime.rec : ""}</span></div>` : ""}
-      ${c.cas.visits ? `<div class="kv"><span>Казино</span><span>выиграно ${money(c.cas.won)}, проиграно ${money(c.cas.lost)}</span></div>` : ""}
+      ${kv("Возраст", `${ageWord(c.age)} (${c.born + c.age} год)`)}${kv("Где живёшь", `${esc(c.house)}, ${esc(c.city)}`)}${kv("Уровень жизни", esc(B8.LS[c.ls]))}
+      ${kv("Место в мире", `богаче ${B8.percentile(c)}% людей`)}${kv("Образование", esc(B8.EDU[c.edu]) + (c.uni ? " (учишься)" : c.school ? " (школа)" : ""))}${kv("Работа", esc(B8.jobTitle(c)))}
+      ${kv("Доход в год", money(c.income))}${kv("Состояние", money(B8.netWorth(c)))}
+      ${c.temper ? kv("Характер", esc(B8.TEMPERS[c.temper][c.sex === "m" ? 0 : 1])) : ""}${c.hobby ? kv("Увлечение", `${esc(B8.HOBBIES[c.hobby][0])} (${Math.round(c.hobbyL)}/100)`) : ""}
+      ${kv("Внешность", Math.round(c.looks) + "/100")}${c.sm.f ? kv("Подписчики", B8.social.fmtF(c.sm.f)) : ""}
+      ${Object.keys(c.conds).length ? kv("Здоровье", Object.keys(c.conds).map((k) => conds[k] || k).join(", ")) : ""}
+      ${c.crime.on || c.crime.rec ? kv("Подполье", (c.crime.on ? esc(B8.crime.rankTitle(c)) : "в прошлом") + (c.crime.rec ? ", судимостей: " + c.crime.rec : "")) : ""}
+      ${pr ? kv("Тюрьма", `${esc(pr.name)} · ${pr.life ? "пожизненно" : "осталось " + ageWord(c.jail)} · ${B8.prison.RANKS[pr.rank]}`) : ""}
+      ${fg ? kv("Розыск", `${Math.round(fg.wanted)}% · ${ageWord(fg.y)} в бегах`) : ""}
+      ${c.cas.visits ? kv("Казино", `выиграно ${money(c.cas.won)}, проиграно ${money(c.cas.lost)}`) : ""}
       ${a.length ? `<h3>Имущество</h3><p>${esc(a.join(", "))}</p>` : ""}
       <h3>Близкие</h3><div class="people">${ppl.join("")}</div>
+      ${(c.paper || []).length ? `<h3>Газеты о тебе</h3>${papersHTML(c, 5)}` : ""}
       <h3>Код судьбы этой жизни</h3><p><b>${B8.seedToCode(c.seed)}</b> — друг может родиться тобой.</p>`, "profile");
     card.onclick = (e) => { if (e.target.closest("[data-close]")) closeSheet(); };
   }
 
   // ═════ меню во время жизни ═════
   function openLifeMenu() {
+    pause();
     const card = sheet(`<h2>☰ Пауза</h2><div class="opts">
       <button class="btn big primary" data-m="back">▶ Продолжить</button>
+      ${(S.paper || []).length ? `<button class="btn big" data-m="paper">📰 Газеты о тебе (${S.paper.length})</button>` : ""}
       <button class="btn big" data-m="code">🔑 Код этой жизни: ${B8.seedToCode(S.seed)}</button>
       <button class="btn big" data-m="set">⚙ Настройки</button>
       <button class="btn big" data-m="end">⏹ Досмотреть жизнь автоматически</button>
-      <button class="btn big" data-m="menu">🏠 В главное меню (жизнь сохранится)</button></div>`, "pause");
+      <button class="btn big" data-m="menu">🏠 В главное меню (жизнь сохранится)</button></div>
+      ${isPC() ? `<p class="why" style="margin-top:0.8rem">Клавиши: пробел — пауза · → — год · 1/2/3 — скорость · 4 — до решения · Д — дела · Ф — фокус · Esc — меню</p>` : ""}`, "pause");
     card.onclick = (e) => {
       const b = e.target.closest("[data-m]"); if (!b) return;
       const m = b.dataset.m;
-      if (m === "back") closeSheet();
+      if (m === "back") { closeSheet(); play(); }
+      if (m === "paper") openPapers();
       if (m === "code") { copy(B8.seedToCode(S.seed)); toast("Код скопирован"); }
       if (m === "set") openSettings();
       if (m === "menu") { closeSheet(); save(true); show("menu"); }
@@ -629,7 +889,8 @@
   }
   function fastForward() {
     let g = 0;
-    while (S.alive && g++ < 130) { B8.advance(S); while (S.pend.length) B8.choose(S, B8.autoPick(S), true); }
+    while (S.alive && g++ < 130) { B8.advance(S); let g2 = 0; while (S.pend.length && g2++ < 12) B8.choose(S, B8.autoPick(S), true); }
+    TL.run = false; TL.skip = false;
     renderLife(true); save(true); setTimeout(endLife, 300);
   }
   function copy(t) { try { navigator.clipboard.writeText(t); } catch (e) {} }
@@ -640,12 +901,12 @@
     UI.endRendered = true;
     B8.finishLife(S);
     const c = S, net = B8.netWorth(c);
-    // мета: атлас, статистика, достижения
     if (!c.meta.counted) {
       c.meta.counted = 1;
       M.atlas[c.cc] = (M.atlas[c.cc] || 0) + 1;
       M.st.lives++; M.st.years += c.age; M.st.maxAge = Math.max(M.st.maxAge, c.age); M.st.maxNet = Math.max(M.st.maxNet, net);
       M.st.kids += c.kids.length; M.st.jail += c.jailTot; if (c.crime.rank >= 5) M.st.bosses++;
+      if (c.flags.fugitive) M.st.escapes = (M.st.escapes || 0) + 1;
       if (c.meta.mode === "daily") M.daily[new Date().toISOString().slice(0, 10)] = c.age;
       if (c.meta.mode === "code") M.codes++;
       for (const a of ACH) checkAch(a.id);
@@ -655,21 +916,26 @@
     const k = B8.K(c.cc);
     const peers = peerLives(c);
     const heirs = B8.heirs(c);
-    $("#end").innerHTML = `<div class="album" id="album"></div>
+    const famous = (c.paper || []).length >= 3;
+    const obit = esc(famous ? `Умер${c.sex === "f" ? "ла" : ""} ${B8.fullName(c)} — ${c.sex === "f" ? "героиня" : "герой"} газетных заголовков. ${B8.epitaph(c)}` : `В городе ${c.city} простились с ${c.sex === "f" ? "жительницей" : "жителем"} по имени ${c.first}. ${B8.epitaph(c)}`);
+    $("#end").innerHTML = `<canvas id="grave" width="480" height="220" class="grave"></canvas><div class="album" id="album"></div>
       <h1>${esc(B8.fullName(c))}</h1><div class="years">${c.born} — ${c.born + c.age} · ${ageWord(c.age)} · ${esc(k.n)}${c.cur !== c.cc ? " → " + esc(cntry(c.cur)) : ""}</div>
       <div class="years">Причина: ${esc(B8.CAUSE[c.cause] || c.cause)}</div>
       <div class="epi">«${esc(B8.epitaph(c))}»</div>
       <div class="score">${c.score}<small>очки жизни</small></div>
       <h3>Итоги</h3>
-      <div class="kv"><span>Образование</span><span>${esc(B8.EDU[c.edu])}</span></div>
-      <div class="kv"><span>Вершина карьеры</span><span>${esc(c.peak || "—")}</span></div>
-      <div class="kv"><span>Состояние</span><span>${money(net)}</span></div>
-      <div class="kv"><span>Средняя радость</span><span>${Math.round(c.hsum / (c.age + 1))}/100</span></div>
-      <div class="kv"><span>Дети и внуки</span><span>${c.kids.length} / ${c.gk}</span></div>
-      ${c.jailTot ? `<div class="kv"><span>В тюрьме</span><span>${ageWord(c.jailTot)}</span></div>` : ""}
-      ${c.crime.rank ? `<div class="kv"><span>В подполье</span><span>${esc(B8.crime.ORG[c.crime.org].ranks[c.crime.rank])}</span></div>` : ""}
-      ${c.cas.visits ? `<div class="kv"><span>Казино</span><span>${c.cas.won > c.cas.lost ? "в плюсе на " + money(c.cas.won - c.cas.lost) : "в минусе на " + money(c.cas.lost - c.cas.won)}</span></div>` : ""}
+      ${kv("Образование", esc(B8.EDU[c.edu]))}${kv("Вершина карьеры", esc(c.peak || "—"))}${kv("Состояние", money(net))}
+      ${kv("Средняя радость", Math.round(c.hsum / (c.age + 1)) + "/100")}${kv("Дети и внуки", c.kids.length + " / " + c.gk)}
+      ${c.jailTot ? kv("В тюрьме", ageWord(c.jailTot) + (c.prLast && c.prLast.rank >= 3 ? " · " + B8.prison.RANKS[c.prLast.rank] : "")) : ""}
+      ${c.flags.fugitive ? kv("Побег", c.flags.statute ? "дождал" + (c.sex === "f" ? "ась" : "ся") + " срока давности" : c.fug ? "так и не поймали" : "был" + (c.sex === "f" ? "а" : "") + " в бегах") : ""}
+      ${c.counts.heists ? kv("Ограблений", c.counts.heists) : ""}
+      ${c.crime.rank ? kv("В подполье", esc(B8.crime.ORG[c.crime.org].ranks[c.crime.rank])) : ""}
+      ${c.cas.visits ? kv("Казино", c.cas.won > c.cas.lost ? "в плюсе на " + money(c.cas.won - c.cas.lost) : "в минусе на " + money(c.cas.lost - c.cas.won)) : ""}
+      ${c.sm.best ? kv("Подписчики", B8.social.fmtF(c.sm.best)) : ""}
+      ${(c.pets || []).length ? kv("Питомцы", c.pets.map((p) => B8.pets.PK[p.k][1] + " " + esc(p.n)).join(", ")) : ""}
       ${c.letter && c.age < 60 ? `<h3>Непрочитанное письмо</h3><div class="letter">${esc(c.letter)}<br><small>— написано в 18, должно было открыться в 60</small></div>` : ""}
+      <h3>Последняя заметка</h3><div class="np clip"><small>📰 ${esc(B8.paperName(c))} · некролог</small><b>${obit}</b></div>
+      ${(c.paper || []).length ? `<h3>Газеты о тебе</h3>${papersHTML(c, 6)}` : ""}
       ${turns ? `<h3>Повороты судьбы</h3><div class="turns">${turns}</div>` : ""}
       <h3>Родились в ту же секунду</h3>${peers}
       <div class="end-btns">
@@ -678,6 +944,7 @@
         ${P() && P().canWall() ? `<button class="btn big" data-e="wall">📤 Рассказать друзьям</button>` : ""}
         <button class="btn big" data-e="code">🔑 Код этой жизни: ${B8.seedToCode(c.seed)}</button>
         <button class="btn big ghost" data-e="menu">🏠 В меню</button></div>`;
+    B8.drawGrave($("#grave"), c);
     const al = $("#album");
     for (const a of c.album.concat(c.album[c.album.length - 1] === c.age ? [] : [c.age])) {
       const f = document.createElement("figure"), cv = document.createElement("canvas");
@@ -685,13 +952,14 @@
       f.appendChild(cv); f.insertAdjacentHTML("beforeend", `<figcaption>${a}</figcaption>`); al.appendChild(f);
     }
     show("end");
+    $("#scr-end").scrollTop = 0;
     sfx("death");
   }
   function peerLives(c) {
     return (c.peers || []).map((seed) => {
       const p = B8.newLife(seed, { born: c.born, world: c.world });
       let g = 0;
-      while (p.alive && g++ < 125) { B8.advance(p); while (p.pend.length) B8.choose(p, B8.autoPick(p), true); }
+      while (p.alive && g++ < 125) { B8.advance(p); let g2 = 0; while (p.pend.length && g2++ < 12) B8.choose(p, B8.autoPick(p), true); }
       const job = p.peak || "без особой карьеры";
       return `<div class="peer"><b>${esc(B8.fullName(p))} · ${esc(cntry(p.cc))}</b>прожил${p.sex === "f" ? "а" : ""} ${ageWord(p.age)}, ${esc(job)}, ${p.kids.length ? p.kids.length + " " + plural(p.kids.length, "ребёнок", "ребёнка", "детей") : "без детей"}. ${esc(B8.epitaph(p))}</div>`;
     }).join("");
@@ -701,7 +969,7 @@
     sfx("click");
     const a = b.dataset.e;
     if (a === "new") newLife(B8.newSeed(), "new");
-    if (a === "menu") { show("menu"); }
+    if (a === "menu") show("menu");
     if (a === "code") { copy(B8.seedToCode(S.seed)); toast("Код скопирован: " + B8.seedToCode(S.seed)); }
     if (a === "wall") P().wallPost(`Я прожил${S.sex === "f" ? "а" : ""} жизнь в стране «${cntry(S.cc)}»: ${ageWord(S.age)}, ${S.peak || "простая жизнь"}. «${B8.epitaph(S)}» Код судьбы: ${B8.seedToCode(S.seed)}. А как проживёшь её ты?`);
     if (a === "heir") openHeirs();
@@ -750,9 +1018,9 @@
     ["boss", "👑", "Глава подполья", "Возглавить криминальную организацию", (c) => c.crime.rank >= 5],
     ["cartel", "🍌", "Банановый король", "Стать главой картеля", (c) => c.crime.rank >= 5 && c.crime.org === "cartel"],
     ["don", "🍝", "Дон", "Стать доном мафиозной семьи", (c) => c.crime.rank >= 5 && c.crime.org === "mafia"],
-    ["clean", "🧼", "Сухим из воды", "Подняться до верхушки подполья и ни разу не сесть", (c) => c.crime.rank >= 4 && !c.jailTot],
+    ["clean", "🧼", "Сухим из воды", "Подняться до верхушки подполья и ни разу не сесть", (c) => c.crime.rank >= 4 && !c.jailTot && !c.jail],
     ["jail10", "⛓", "Тюремный стаж", "Провести в тюрьме 10 лет", (c) => c.jailTot >= 10],
-    ["escape", "🕳", "Побег", "Сбежать из тюрьмы", (c) => !!c.flags.fugitive],
+    ["escape", "🕳", "Побег", "Сбежать из-под стражи", (c) => !!c.flags.fugitive],
     ["redeem", "🕊", "Новая жизнь", "Выйти на свободу и начать заново", (c) => !!c.flags.redeemed],
     ["witness", "🎭", "Новое имя", "Попасть в программу защиты свидетелей", (c) => !!c.flags.witness],
     ["tm", "⏳", "Второй шанс", "Воспользоваться машиной времени", (c) => !!c.tm],
@@ -764,8 +1032,33 @@
     ["atlas30", "🌍", "Половина мира", "Родиться в 30 разных странах", () => Object.keys(M.atlas).length >= 30],
     ["daily", "📅", "Жизнь дня", "Прожить жизнь дня", (c) => c.meta && c.meta.mode === "daily" && !c.alive],
     ["code", "🔑", "Чужая судьба", "Прожить жизнь по коду судьбы", (c) => c.meta && c.meta.mode === "code" && !c.alive],
+    // 2.0
+    ["watcher", "👁", "Смотрящий", "Стать смотрящим в тюрьме", (c) => !!c.flags.watcher],
+    ["noodle", "🍜", "Лапшичный магнат", "Заработать за решёткой 100 пачек лапши", (c) => !!c.flags.noodle],
+    ["spoon", "🥄", "Ложка судьбы", "Сбежать через подкоп, вырытый ложкой", (c) => !!c.flags.esc_spoon],
+    ["heli", "🚁", "Вертолёт подан", "Улететь из тюрьмы на вертолёте", (c) => !!c.flags.esc_heli],
+    ["catback", "🐈", "Сбежал и вернулся за кошкой", "Вернуться за тюремным котом после побега", (c) => !!c.flags.cat_back],
+    ["choco", "🍫", "Сел за шоколадку", "Получить срок за украденную шоколадку", (c) => !!c.flags.choco_jail],
+    ["morein", "🔒", "Там больше, чем здесь", "Отсидеть больше, чем прожил на воле", (c) => !c.alive && c.age > 20 && c.jailTot > c.age - c.jailTot],
+    ["lifer", "♾", "Пожизненно", "Получить пожизненный срок", (c) => !!c.flags.lifer],
+    ["statute", "⌛", "Срок давности", "Скрываться, пока дело не закроют", (c) => !!c.flags.statute],
+    ["wanted", "🚨", "Звезда розыска", "Розыск 90% и выше", (c) => !!c.flags.wanted90],
+    ["parrot", "🦜", "Попугай-свидетель", "Вызвать попугая свидетелем в суд", (c) => !!c.flags.parrot],
+    ["century", "🏛", "Дело века", "Провернуть ограбление века", (c) => !!c.flags.century],
+    ["crew", "🎬", "Банда в сборе", "Ограбление с полной командой из четырёх", (c) => !!c.flags.fullcrew],
+    ["heists5", "💰", "Профессионал", "Пять удачных ограблений за жизнь", (c) => !!c.flags.heists5],
+    ["judge", "🤝", "Судья-друг", "Выйти из суда благодаря «подарку»", (c) => !!c.flags.judge],
+    ["rat", "🐀", "Крыса", "Сдать своих", (c) => !!c.flags.rat],
+    ["mfollow", "📱", "Миллион подписчиков", "Набрать миллион подписчиков", (c) => (c.sm && c.sm.best >= 1e6)],
+    ["paper10", "📰", "Газетная звезда", "Десять заметок о тебе в газетах", (c) => (c.paper || []).length >= 10],
+    ["zoo", "🐾", "Зоопарк", "Пять питомцев за одну жизнь", (c) => !!c.flags.zoo],
+    ["pwed", "💒", "Свадьба за решёткой", "Пожениться по переписке, сидя в тюрьме", (c) => !!c.flags.prison_wed],
+    ["book", "📕", "Как я сидел", "Написать книгу о тюрьме", (c) => !!c.flags.book],
+    ["psych", "🫖", "Чайник", "Убедить психиатра, что ты чайник", (c) => !!c.flags.psych],
+    ["recid", "🔁", "Постоянный клиент", "Три судимости", (c) => c.crime.rec >= 3],
   ].map(([id, ic, t, d, f]) => ({ id, ic, t, d, f }));
-  const ACH_LIVE = ["million", "billion", "boss", "cartel", "don", "jackpot", "lottery", "old100"];
+  const ACH_LIVE = ["million", "billion", "boss", "cartel", "don", "jackpot", "lottery", "old100", "watcher", "noodle", "spoon", "heli", "catback", "choco", "lifer", "statute", "wanted", "parrot",
+    "century", "crew", "heists5", "judge", "rat", "mfollow", "paper10", "zoo", "pwed", "book", "psych", "recid", "escape", "witness", "jail10"];
   function checkAch(id) {
     if (!S || !M) return;
     const list = id === "biz" ? ["biz", "empire", "ipo"] : id === "cas" ? ["jackpot"] : id === "crime" ? ["boss", "cartel", "don", "clean", "escape"] : [id];
@@ -792,17 +1085,15 @@
   function openStats() {
     const s = M.st;
     const card = sheet(`<button class="ico close" data-close="1">✕</button><h2>📊 Статистика</h2>
-      <div class="kv"><span>Прожито жизней</span><span>${s.lives}</span></div><div class="kv"><span>Всего лет</span><span>${s.years}</span></div>
-      <div class="kv"><span>Самая долгая жизнь</span><span>${ageWord(s.maxAge)}</span></div><div class="kv"><span>Самое большое состояние</span><span>${money(s.maxNet)}</span></div>
-      <div class="kv"><span>Детей за все жизни</span><span>${s.kids}</span></div><div class="kv"><span>Лет в тюрьме</span><span>${s.jail}</span></div>
-      <div class="kv"><span>Глав подполья</span><span>${s.bosses}</span></div><div class="kv"><span>Стран в атласе</span><span>${Object.keys(M.atlas).length} из 69</span></div>`, "stats");
+      ${kv("Прожито жизней", s.lives)}${kv("Всего лет", s.years)}${kv("Самая долгая жизнь", ageWord(s.maxAge))}${kv("Самое большое состояние", money(s.maxNet))}
+      ${kv("Детей за все жизни", s.kids)}${kv("Лет в тюрьме", s.jail)}${kv("Удачных ограблений", s.heists || 0)}${kv("Побегов", s.escapes || 0)}${kv("Глав подполья", s.bosses)}${kv("Стран в атласе", Object.keys(M.atlas).length + " из 69")}`, "stats");
     card.onclick = (e) => { if (e.target.closest("[data-close]")) closeSheet(); };
   }
   function openSettings() {
-    const sp = ["медленно", "нормально", "быстро"];
     const card = sheet(`<button class="ico close" data-close="1">✕</button><h2>⚙ Настройки</h2>
       <div class="opts"><button class="opt" data-s="sound"><span>🔊 Звук</span><span class="pc">${M.set.sound !== false ? "вкл" : "выкл"}</span></button>
-      <button class="opt" data-s="speed"><span>⏩ Скорость авто-лет</span><span class="pc">${sp[M.set.speed != null ? M.set.speed : 1]}</span></button>
+      <button class="opt" data-s="spd"><span>⏩ Скорость времени по умолчанию<small>год длится ${(YEAR_MS / 1000 / (M.set.spd || 1)).toFixed(1).replace(".", ",")} с</small></span><span class="pc">×${M.set.spd || 1}</span></button>
+      <button class="opt" data-s="voice"><span>💭 Голос совести в летописи</span><span class="pc">${M.set.voice !== false ? "вкл" : "выкл"}</span></button>
       <button class="opt" data-s="tut"><span>🎓 Пройти обучение заново</span></button>
       <button class="opt" data-s="reset"><span>🗑 Сбросить весь прогресс</span></button></div>`, "settings");
     card.onclick = (e) => {
@@ -810,7 +1101,8 @@
       const b = e.target.closest("[data-s]"); if (!b) return;
       const s = b.dataset.s;
       if (s === "sound") { M.set.sound = M.set.sound === false; B8.audio.on = M.set.sound; }
-      if (s === "speed") M.set.speed = ((M.set.speed != null ? M.set.speed : 1) + 1) % 3;
+      if (s === "spd") { M.set.spd = { 1: 2, 2: 4, 4: 1 }[M.set.spd || 1]; TL.sp = M.set.spd; }
+      if (s === "voice") { M.set.voice = M.set.voice === false; if (S && UI.screen === "life") UI.logShown = 0; }
       if (s === "tut") { M.tut = 0; save(); closeSheet(); show("menu"); TUT.reset(); return; }
       if (s === "reset") {
         sheet(`<h2>Сбросить всё?</h2><p>Удалятся все жизни, атлас, достижения и статистика. Это нельзя отменить.</p><div class="opts"><button class="btn big danger" data-y="1">Да, удалить всё</button><button class="btn big" data-n="1">Отмена</button></div>`, "confirm").onclick = (ev) => {
@@ -837,43 +1129,75 @@
   function openAbout() {
     const card = sheet(`<button class="ico close" data-close="1">✕</button><h2>ℹ Об игре</h2>
       <p>«1 из 8 миллиардов» — симулятор жизни. Страну рождения выбирает колесо, где у каждой страны сектор равен её доле в рождениях на Земле. Продолжительность жизни, доходы, грамотность и детская смертность — по данным реальных стран.</p>
-      <p>Каждый год — события, которые вытекают из твоего положения и прошлых решений. Учёба, любовь, карьера, бизнес, казино и тёмные дела. У каждой страны — свой колорит и своё подполье.</p>
+      <p>Время идёт само: год за годом — события, решения и последствия. Учёба, любовь, карьера, бизнес, казино, питомцы и соцсети. А ещё — тёмные дела: улики, суд, тюрьма, побеги и жизнь в бегах. У каждой страны — свой колорит и своё подполье.</p>
       <p class="why">Все персонажи и организации вымышлены. Казино в игре — только на игровые деньги, купить их нельзя. Криминал в игре — шутка, а в жизни за это сажают. Возраст: 16+.</p>
       <p class="why">Версия ${VERSION} · <a href="privacy.html" target="_blank" style="color:var(--gold)">Конфиденциальность</a> · <a href="terms.html" target="_blank" style="color:var(--gold)">Соглашение</a></p>
       <p class="why">Разработчик: Шакуров Даниил Денисович · ponosolenya@gmail.com</p>`, "about");
     card.onclick = (e) => { if (e.target.closest("[data-close]")) closeSheet(); };
   }
 
+  // ═════ горячие клавиши ═════
+  document.addEventListener("keydown", (e) => {
+    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.code;
+    if (UI.sheet === "mg") { if (B8.mg.key(e)) e.preventDefault(); return; }
+    if (UI.sheet === "decision") { const m = /^(Digit|Numpad)([1-9])$/.exec(k); if (m) { const o = $$("#sheet-card .opt")[+m[2] - 1]; if (o) { e.preventDefault(); o.click(); } } return; }
+    if (UI.sheet === "result") { if (k === "Enter" || k === "Space" || k === "ArrowRight") { const n = $("#sheet-card [data-n]"); if (n) { e.preventDefault(); n.click(); } } return; }
+    if (UI.sheet === "heist") {
+      const m = /^(Digit|Numpad)([1-9])$/.exec(k);
+      if (m) { const o = $$("#sheet-card [data-i]")[+m[2] - 1]; if (o) { e.preventDefault(); o.click(); } }
+      else if (k === "Enter" || k === "Space") { const n = $("#sheet-card [data-n], #sheet-card [data-v], #sheet-card [data-go], #sheet-card [data-next]"); if (n) { e.preventDefault(); n.click(); } }
+      return;
+    }
+    if (UI.sheet) { if (k === "Escape" && !LOCKED.includes(UI.sheet)) { e.preventDefault(); closeSheet(); } return; }
+    if (TUT.active() && UI.screen === "life") { if (k === "ArrowRight" || k === "Enter") { const st = cur(); if (st && st.on === "year") { e.preventDefault(); manualYear(); } } return; }
+    if (UI.screen !== "life" || !S || !S.alive) return;
+    if (k === "Space") { e.preventDefault(); togglePlay(); }
+    else if (k === "ArrowRight" || k === "Enter") { e.preventDefault(); manualYear(); }
+    else if (k === "Digit1") play(1);
+    else if (k === "Digit2") play(2);
+    else if (k === "Digit3") play(4);
+    else if (k === "Digit4") toggleSkip();
+    else if (k === "KeyL" || k === "KeyD") { if (isPC()) { const p = $("#side-r"); p.classList.remove("flash"); void p.offsetWidth; p.classList.add("flash"); } else openActs(); }
+    else if (k === "KeyA" || k === "KeyF") cycleFocus();
+    else if (k === "Escape") openLifeMenu();
+  });
+  let wasPC = isPC() + "" + isWide();
+  window.addEventListener("resize", () => { const n = isPC() + "" + isWide(); if (n !== wasPC) { wasPC = n; if (UI.screen === "life" && S) { if (UI.sheet === "acts" && isPC()) closeSheet(); renderLife(true); } } });
+
   // ═════ ОБУЧЕНИЕ — прямо в игре, шаг за шагом ═════
-  // Никаких текстовых окон: Судьба ведёт по первой жизни, подсвечивает нужную кнопку и ждёт действия игрока.
   const TS = [
     { k: "start", at: "menu", dom: '[data-a="new"]', on: "newLife", t: "Привет! Это симулятор жизни. Ты не выбираешь, где родиться — как и восемь миллиардов людей на Земле. Жми «**Новая жизнь**»." },
     { k: "spin", at: "wheel", dom: "#spin", on: "spun", t: "Это колесо стран. Чем больше детей рождается в стране, тем шире её сектор: Индия — пятая часть круга, Норвегия — тонкая полоска. **Крути!**" },
     { k: "go", at: "wheel", ring: ["#wheel-res", "#wheel-go"], dom: "#wheel-go", on: "toBirth", t: "Судьба решила. Жми «**Дальше**»." },
     { k: "cert", at: "birth", ring: "#cert", btn: "ok", t: "Твоё свидетельство о рождении: имя, семья, вера, достаток. Всё случайно — как в жизни. От этого зависит, что тебя ждёт." },
     { k: "live", at: "birth", dom: "#cert-go", on: "lifeStart", t: "Жми «**Начать жизнь**»." },
-    { k: "stats", at: "life", ring: "#stats", btn: "ok", t: "Это **шкалы жизни**: здоровье, счастье, ум, отношения с людьми и стресс. Они меняются от событий и твоих решений." },
-    { k: "year", at: "life", dom: "#btn-year", on: "year", t: "Жми «**＋ Год**» — проживёшь целый год." },
+    { k: "stats", at: "life", ring: ["#stats", "#dossier .dz-stats"], btn: "ok", t: "Это **шкалы жизни**: здоровье, счастье, ум, отношения с людьми и стресс. Они меняются от событий и твоих решений." },
+    { k: "year", at: "life", dom: "#btn-year", on: "year", t: "Пока время на паузе. Жми «**＋ Год**» — проживёшь целый год." },
     { k: "log", at: "life", ring: "#log", dom: "#btn-year", on: "year", t: "Всё, что случилось, — в **летописи**. Серым — причина события. Жми «**＋ Год**» ещё раз." },
     { k: "choice", at: "sheet:decision", ring: "#sheet-card", dom: ".opt", on: "choice", t: "**Решения!** Каждый выбор меняет характер и будущее. Если у варианта есть процент — это шанс, что всё получится. Выбери." },
     { k: "next", at: "sheet:result", dom: "[data-n]", on: "closed:result", t: "Вот что вышло. Жми «**Дальше**»." },
-    { k: "acts", at: "life", dom: "#btn-acts", on: "acts", t: "А это «**Дела**»: учёба, работа, любовь, бизнес, казино и даже тёмные дела. Открой." },
-    { k: "actsIn", at: "sheet:acts", ring: "#sheet-card", btn: "ok", t: "Пока ты малыш, дел немного. С возрастом откроются школа и работа, с 14 — тёмные дела, с 18 — бизнес и казино. Каждое дело — раз в год." },
-    { k: "close", at: "sheet:acts", dom: "[data-close]", on: "closed:acts", t: "Закрой и живи дальше." },
-    { k: "auto", at: "life", dom: "#btn-auto", btn: "go", t: "Кнопка **⏩** проживает годы сама и останавливается на важных решениях. Дальше — твоя жизнь. Удачи!" },
+    { k: "acts", at: "life", dom: "#btn-acts", on: "acts", t: "А это «**Дела**»: учёба, работа, любовь, питомцы, бизнес, казино и даже тёмные дела. Открой.",
+      pc: { dom: null, on: null, ring: "#side-r", btn: "ok", t: "Справа — «**Дела**»: учёба, работа, любовь, питомцы, бизнес, казино и даже тёмные дела. Пока ты малыш, дел немного. Каждое дело — раз в год." } },
+    { k: "actsIn", at: "sheet:acts", ring: "#sheet-card", btn: "ok", pcSkip: true, t: "Пока ты малыш, дел немного. С возрастом откроются школа и работа, с 14 — тёмные дела, с 18 — бизнес, казино и ограбления. Каждое дело — раз в год." },
+    { k: "close", at: "sheet:acts", dom: "[data-close]", on: "closed:acts", pcSkip: true, t: "Закрой и живи дальше." },
+    { k: "time", at: "life", ring: "#timeline", btn: "ok", t: "Сверху — **полоса года**. Время идёт само: ▶ и ⏸ — пуск и пауза, ×2 и ×4 — быстрее, ⏭ — мотать до следующего решения, ⏪ — машина времени. На решениях игра сама встаёт на паузу.",
+      pc: { t: "Сверху — **полоса года**. Время идёт само: ▶ и ⏸ — пуск и пауза (или пробел), ×2 и ×4 — быстрее, ⏭ — до следующего решения, ⏪ — машина времени. Решения — клавишами 1–4." } },
+    { k: "focus", at: "life", ring: "#focus", btn: "go", t: "А это **фокус года**: на что ты тратишь время — учёба, карьера, здоровье, деньги… С 14 появится «Улица», с 18 — «Тёмные дела». Дальше — твоя жизнь. Удачи!" },
   ];
   const TUT = {};
   let stepAt = 0, painted = "", scrolled = -1, waiting = -1;
   TUT.active = () => M && M.tut < TS.length;
   TUT.done = () => !TUT.active();
   TUT.reset = () => { stepAt = performance.now(); painted = ""; scrolled = -1; waiting = -1; };
-  const cur = () => (TUT.active() ? TS[M.tut] : null);
-  function next() { if (!TUT.active()) return; M.tut++; TUT.reset(); save(); if (!TUT.active()) TUT.finish(); }
-  TUT.finish = () => { M.tut = 99; $("#tut").hidden = true; save(); };
+  function cur() { if (!TUT.active()) return null; const st = TS[M.tut]; return isPC() && st.pc ? Object.assign({}, st, st.pc) : st; }
+  function next() { if (!TUT.active()) return; M.tut++; while (TUT.active() && isPC() && TS[M.tut].pcSkip) M.tut++; TUT.reset(); save(); if (!TUT.active()) TUT.finish(); }
+  TUT.finish = () => { M.tut = 99; $("#tut").hidden = true; save(); if (UI.screen === "life" && S && S.alive) play(M.set.spd || 1); };
   TUT.ev = function (name) {
     if (!TUT.active()) return;
-    const st = TS[M.tut];
-    if (st.on !== name || waiting === M.tut) return;
+    const st = cur();
+    if (!st || st.on !== name || waiting === M.tut) return;
     const at = (waiting = M.tut);
     setTimeout(() => { if (M.tut === at) next(); }, 250);
   };
@@ -896,11 +1220,12 @@
     const vis = !!st && ctxOk(st) && performance.now() - stepAt > 300 && !spinning;
     if (box.hidden === vis) box.hidden = !vis;
     if (!vis) return;
-    const key = M.tut + "";
+    const key = M.tut + (isPC() ? "p" : "m");
     if (painted !== key) {
       painted = key;
-      const shown = TS.length;
-      $("#tut-step").textContent = `${M.tut + 1}/${shown}`;
+      const shown = isPC() ? TS.filter((x) => !x.pcSkip).length : TS.length;
+      const idx = isPC() ? TS.slice(0, M.tut).filter((x) => !x.pcSkip).length : M.tut;
+      $("#tut-step").textContent = `${idx + 1}/${shown}`;
       $("#tut-text").innerHTML = esc(st.t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
       const b = $("#tut-btn"); b.hidden = !st.btn; b.textContent = st.btn === "go" ? "Поехали!" : "Понятно";
       const sk = $("#tut-skip"); sk.hidden = M.tut < 2 || st.btn === "go";
@@ -923,12 +1248,15 @@
     if (holes.length) shade.firstElementChild.setAttribute("d", `M0 0H${vw}V${vh}H0Z` + holes.map(hole).join(""));
     if (fr) { Object.assign(fin.style, { left: fr.x + fr.w / 2 + "px", top: fr.y + fr.h / 2 + "px" }); fin.hidden = false; } else fin.hidden = true;
     const bh = bub.offsetHeight || 120;
-    let by;
+    let by, bx = null;
     if (st.at.startsWith("sheet:")) { const top = $("#sheet-card").getBoundingClientRect().top - app.top; by = top > bh + 16 ? top - bh - 10 : 8; }
     else if (!rr) by = vh / 2 - bh / 2;
+    else if (isPC() && rr.w < vw * 0.4 && st.at === "life") { by = Math.max(8, Math.min(vh - bh - 8, rr.y + rr.h / 2 - bh / 2)); bx = rr.x > vw / 2 ? Math.max(8, rr.x - 380) : Math.min(vw - 380, rr.x + rr.w + 14); }
     else if (rr.y + rr.h / 2 > vh * 0.5) by = Math.max(8, rr.y - bh - 14);
     else by = Math.min(vh - bh - 8, rr.y + rr.h + 14);
     bub.style.top = Math.round(by) + "px";
+    if (bx != null) { bub.style.left = Math.round(bx) + "px"; bub.style.right = "auto"; bub.style.width = "360px"; bub.style.margin = "0"; }
+    else { bub.style.left = ""; bub.style.right = ""; bub.style.width = ""; bub.style.margin = ""; }
   }
   $("#tut-btn").onclick = () => { const st = cur(); if (!st) return; sfx("click"); if (st.btn === "go") { TUT.finish(); toast("Удачной жизни!", "gold"); } else next(); };
   $("#tut-skip").onclick = () => { sfx("click"); TUT.finish(); };
@@ -936,20 +1264,20 @@
   // ═════ запуск ═════
   async function boot() {
     loadAll();
-    // старые игроки, у которых уже есть прожитые жизни, обучение не видят
     if (M.st.lives > 0 && M.tut < 99 && !TUT.active()) M.tut = 99;
+    TL.sp = M.set.spd || 1;
     show("menu");
     requestAnimationFrame(tutFrame);
     try {
       const ok = await P().init();
       if (ok && P().vk) {
         const cl = await P().cloudLoad();
-        if (cl && cl.m && (cl.m.st.lives > M.st.lives || (!S && cl.l))) { M = Object.assign(defMeta(), cl.m); if (cl.l) S = cl.l; B8.audio.on = M.set.sound !== false; show("menu"); }
+        if (cl && cl.m && (cl.m.st.lives > M.st.lives || (!S && cl.l))) { M = Object.assign(defMeta(), cl.m); M.set = Object.assign({ sound: true, spd: 1, voice: true }, M.set || {}); if (cl.l) S = B8.migrate(cl.l); B8.audio.on = M.set.sound !== false; show("menu"); }
       }
       P().ready();
     } catch (e) {}
-    document.addEventListener("visibilitychange", () => { if (document.hidden) { stopAuto(); save(true); } });
+    document.addEventListener("visibilitychange", () => { if (document.hidden) { if (TL.run || TL.skip) pause(); save(true); } });
   }
   window.addEventListener("DOMContentLoaded", boot);
-  B8.debug = { get S() { return S; }, set S(v) { S = v; }, get M() { return M; }, UI, show, openDecision, renderLife, TUT, ACH };
+  B8.debug = { get S() { return S; }, set S(v) { S = v; }, get M() { return M; }, UI, TL, show, openDecision, renderLife, TUT, ACH, play, pause, isPC, openHeist, openPoster, openPapers };
 })();

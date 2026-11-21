@@ -62,7 +62,7 @@
     cr.on = true; cr.org = CR.type(c); cr.rank = Math.max(cr.rank, 0); cr.orgName = cr.orgName || CR.orgName(c);
     B8.turn(c, "вступление: " + cr.orgName);
   };
-  CR.leave = function (c) { c.crime.on = false; c.crime.rank = 0; B8.turn(c, "завязал[|а] с прошлым".replace(/\[\|а\]/, c.sex === "f" ? "а" : "")); };
+  CR.leave = function (c) { c.crime.on = false; c.crime.rank = 0; B8.turn(c, c.sex === "f" ? "завязала с прошлым" : "завязал с прошлым"); if (B8.voice) B8.voice(c, "quit"); };
   function rankUp(c) {
     const cr = c.crime;
     if (!cr.on) return;
@@ -189,7 +189,7 @@
     if (R.r(c) < p) {
       let sum = gdp * (rew[0] + R.r(c) * (rew[1] - rew[0])) * (1 + cr.rank * 0.25);
       c.money += sum; cr.earned += sum; cr.rep += rep; cr.heat += heat;
-      if (id === "coup") { cr.rank = 5; B8.turn(c, CR.rankTitle(c)); return res(c, `Старый глава ушёл «на пенсию». Теперь ${cr.orgName} — твои. Ты — ${CR.rankTitle(c)}.`, "g", true); }
+      if (id === "coup") { cr.rank = 5; B8.turn(c, CR.rankTitle(c)); if (B8.voice) B8.voice(c, "boss"); if (B8.paper) B8.paper(c, `Новый хозяин теневого мира: ${cr.orgName} сменила главу`, "источники в полиции"); return res(c, `Старый глава ушёл «на пенсию». Теперь ${cr.orgName} — твои. Ты — ${CR.rankTitle(c)}.`, "g", true); }
       if (id === "war") { c.h -= R.int(c, 0, 10); }
       if (cr.on) rankUp(c);
       const T = {
@@ -254,7 +254,9 @@
     c.biz = { id, kind: x[1], name: nm.replace(/^[«"]|[»"]$/g, ""), val: cap, lvl: 1, y: 0, hype: 0, mgr: false, best: cap, profit: 0 };
     if (c.job) c.job = null;
     B8.turn(c, "свой бизнес: " + x[1]);
-    return res(c, `Ты открыл[|а] свой бизнес — ${x[1]} «${c.biz.name}». Вложено ${B8.money(cap)}.`, "g", true);
+    const rr = res(c, `Ты открыл[|а] свой бизнес — ${x[1]} «${c.biz.name}». Вложено ${B8.money(cap)}.`, "g", true);
+    B8.scene(c, "biz");
+    return rr;
   };
   BZ.year = function (c) {
     const b = c.biz;
@@ -303,7 +305,7 @@
       b.val += x * 0.3; B8.stress(c, 10, "неудачное расширение"); return res(c, "Расширение не задалось: новые точки пустуют. Деньги ушли в аренду.", "b");
     }
     if (id === "mgr") { b.mgr = !b.mgr; return res(c, b.mgr ? "Ты нанял[|а] управляющего. Теперь можно иногда спать." : "Ты снова сам[|а] у руля.", "n"); }
-    if (id === "ipo") { b.ipo = 1; const x = b.val * 0.6; c.money += x; b.val *= 1.2; B8.turn(c, "IPO"); return res(c, `IPO! Акции «${b.name}» торгуются на бирже. Ты получил[|а] ${B8.money(x)}, и компания всё ещё твоя.`, "g", true); }
+    if (id === "ipo") { b.ipo = 1; const x = b.val * 0.6; c.money += x; b.val *= 1.2; B8.turn(c, "IPO"); if (B8.paper) B8.paper(c, `Акции «${b.name}» взлетели в первый же день торгов`, "биржевая сводка"); return res(c, `IPO! Акции «${b.name}» торгуются на бирже. Ты получил[|а] ${B8.money(x)}, и компания всё ещё твоя.`, "g", true); }
     if (id === "sell") { const ratio = 0.75 + R.r(c) * 0.45; return BZ.close(c, ratio, "продан"); }
     return { text: "", kind: "n" };
   };
@@ -425,12 +427,8 @@
     const it = (id, icon, label, hint, ok = true, why = "") => ({ id, icon, label, hint, ok: ok && once(id), why: ok ? (once(id) ? "" : "уже в этом году") : why });
     if (!c.alive) return g;
     if (a < 3) { g.push(["Малыш", [it("cry", "😭", "Плакать погромче", "родители прибегут"), it("sleep", "😴", "Поспать", "Здоровье↑"), it("smile", "😊", "Улыбнуться бабушке", "Люди↑")]]); return g; }
-    if (c.jail) {
-      g.push(["Тюрьма", [it("j_gym", "🏋️", "Тюремный спортзал", "Здоровье↑ Уважение↑"), it("j_study", "📚", "Учиться заочно", "Ум↑"), it("j_work", "🧵", "Работать в мастерской", "немного денег"),
-        it("j_appeal", "⚖️", "Подать апелляцию", "шанс выйти раньше", !c.flags.appealed, "уже подавал[|а]"), it("j_escape", "🕳", "Попытаться сбежать", "очень рискованно"),
-      ].concat(B8.platform && B8.platform.hasAds() && c.jail > 1 && !c.flags.jail_ad ? [it("j_rew", "📺", "Примерное поведение", "−1 год срока за рекламу")] : [])]);
-      return g;
-    }
+    if (c.jail) return B8.prison.groups(c, it);
+    if (c.fug) return B8.fug.groups(c, it);
     const me = [];
     if (a >= 6) me.push(it("focus", "🎯", "Фокус года", "на что тратишь время", true));
     me.push(it("doctor", "🩺", "Сходить к врачу", a >= 18 ? "стоит " + B8.money(gdp * 0.05) : "Здоровье↑", a < 18 || c.money >= gdp * 0.05, "нет денег"));
@@ -470,6 +468,10 @@
     if (c.spouse && c.spouse.alive && a >= 18 && a <= (c.sex === "f" ? 45 : 60)) lv.push(it("baby", "👶", "Завести ребёнка", "", c.kids.length < 12));
     if (c.kids.some((k) => k.alive)) lv.push(it("kids", "🧒", "Время с детьми", "Отношения↑ Счастье↑"));
     if (a >= 18 && !(c.spouse && c.spouse.alive)) lv.push(it("adopt", "🏡", "Усыновить ребёнка", "нужен достаток", c.ls >= 2, "нужен уровень жизни «комфортно»"));
+    if (a >= 12) lv.push(it("post", "📱", "Пост в соцсети", c.sm.f ? B8.social.fmtF(c.sm.f) + " · подписчики" : "вдруг станешь звездой"));
+    const petsAlive = (c.pets || []).filter((p) => p.alive);
+    if (a >= 5 && petsAlive.length < 3) lv.push(it("pet", "🐾", a < 18 ? "Уговорить родителей на питомца" : "Завести питомца", "друг на годы", a < 18 || c.money >= gdp * 0.02, "нужно " + B8.money(gdp * 0.02)));
+    if (petsAlive.length) lv.push(it("petplay", "🐾", "Время с питомцем", petsAlive.map((p) => p.n).join(", ")));
     g.push(["Люди", lv]);
     const mn = [];
     if (a >= 18) {
@@ -494,7 +496,7 @@
     if (bz.length) g.push(["Бизнес и риск", bz]);
     if (a >= 14) {
       const cr = c.crime;
-      g.push(["Тёмные дела", [{ id: "crime", icon: "🕶", label: cr.on ? `${cr.orgName}: ${CR.rankTitle(c)}` : "Тёмные дела", hint: cr.on ? "репутация " + Math.round(cr.rep) + " · внимание полиции " + Math.round(cr.heat) + "%" : "мелкие делишки и не только",
+      g.push(["Тёмные дела", [{ id: "crime", icon: "🕶", label: cr.on ? `${cr.orgName}: ${CR.rankTitle(c)}` : "Тёмные дела", hint: cr.on ? "улики " + Math.round(cr.ev || 0) + "% · полиция " + Math.round(cr.heat) + "%" : (cr.ev || 0) > 5 ? "улики " + Math.round(cr.ev) + "% · полиция " + Math.round(cr.heat) + "%" : "делишки, ограбления и не только",
         ok: (c.ya.crime || 0) < 3, why: (c.ya.crime || 0) >= 3 ? "на этот год хватит" : "" }]]);
     }
     const mv = [];
@@ -507,7 +509,7 @@
   // выполнить простое дело → { text, kind } или { open: "jobs" | "biz" | "casino" | "crime" | "focus" | "uni" | "emigrate" | "bizopen" }
   A.run = function (c, id) {
     const gdp = B8.gdp(c), a = c.age, pr = (t, k) => res(c, t, k);
-    const opens = { focus: 1, jobs: 1, biz: 1, biz_open: 1, casino: 1, crime: 1, emigrate: 1, home: 1, timemachine: 1, invest: 1, uni: 1 };
+    const opens = { focus: 1, jobs: 1, biz: 1, biz_open: 1, casino: 1, crime: 1, emigrate: 1, home: 1, timemachine: 1, invest: 1, uni: 1, f_poster: 1 };
     if (opens[id]) return { open: id };
     if (["work_hard", "raise", "quit"].includes(id) && !c.job) return { text: "", kind: "n" };
     c.ya[id] = 1;
@@ -564,17 +566,12 @@
       case "yacht": { c.money -= gdp * 40; c.a.yacht = 1; c.hap += 5; return pr("Ты купил[|а] яхту. Укачивает, но статус обязывает.", "g"); }
       case "withdraw": { c.money += c.inv; const x = c.inv; c.inv = 0; return pr(`Ты забрал[|а] из инвестиций ${B8.money(x)}.`, "n"); }
       case "charity": { const x = Math.max(gdp * 0.1, c.money * 0.1); c.money -= x; c.hap += 5; c.soc += 3; c.counts.charity = (c.counts.charity || 0) + x; return pr(`Ты пожертвовал[|а] ${B8.money(x)} — ${R.pick(c, ["детской больнице", "приюту для животных", "школе в деревне", "фонду помощи пожилым"])}.`, "g"); }
-      case "lottery": { c.money -= gdp * 0.002; if (R.r(c) < 0.0015) { const x = gdp * 300; c.money += x; c.flags.lottery = 1; B8.turn(c, "джекпот в лотерее"); return res(c, `ДЖЕКПОТ! Ты выиграл[|а] в лотерею ${B8.money(x)}!`, "g", true); } if (R.r(c) < 0.06) { const x = gdp * 0.05; c.money += x; return pr(`Билет выиграл ${B8.money(x)}. Мелочь, а приятно.`, "g"); } return pr(R.pick(c, ["Билет не выиграл. Как и все предыдущие.", "Не совпала ни одна цифра. Зато была надежда целую неделю.", "Мимо. Продавщица сказала, что следующий точно счастливый."]), "n"); }
+      case "lottery": { c.money -= gdp * 0.002; if (R.r(c) < 0.0015) { const x = gdp * 300; c.money += x; c.flags.lottery = 1; B8.turn(c, "джекпот в лотерее"); const rr = res(c, `ДЖЕКПОТ! Ты выиграл[|а] в лотерею ${B8.money(x)}!`, "g", true); B8.scene(c, "jackpot"); if (B8.paper) B8.paper(c, `Счастливчик из города {city} сорвал джекпот: ${B8.money(x)}. Билет купили «на сдачу»`, "лотерея"); return rr; } if (R.r(c) < 0.06) { const x = gdp * 0.05; c.money += x; return pr(`Билет выиграл ${B8.money(x)}. Мелочь, а приятно.`, "g"); } return pr(R.pick(c, ["Билет не выиграл. Как и все предыдущие.", "Не совпала ни одна цифра. Зато была надежда целую неделю.", "Мимо. Продавщица сказала, что следующий точно счастливый."]), "n"); }
       case "move_city": { const k = K(c); const nc = R.pick(c, k.cities.filter((x) => x !== c.city)) || c.city; c.city = nc; c.urban = true; c.st += 6; c.soc -= 4; if (c.friend) c.friend.close = false; return pr(`Ты переехал[|а] в ${nc}. Новые улицы, новые лица.`, "n"); }
-      case "j_gym": { c.h += 4; c.crime.rep += 3; return pr("Тюремный спортзал: железо, тишина и уважение сокамерников.", "g"); }
-      case "j_study": { c.iq += 4; if (c.edu < 2 && R.r(c) < 0.35) { c.edu = 2; return pr("Ты получил[|а] аттестат прямо в тюрьме.", "g"); } return pr("Ты читаешь всё из тюремной библиотеки. Даже энциклопедию на букву «К».", "g"); }
-      case "j_work": { const x = gdp * 0.02; c.money += x; return pr("Ты шил[|а] рукавицы в мастерской. Платят копейки, но время идёт быстрее.", "n"); }
-      case "j_appeal": { c.flags.appealed = 1; if (R.r(c) < 0.22) { c.jail = Math.max(1, Math.floor(c.jail / 2)); return pr("Апелляцию удовлетворили: срок сократили вдвое!", "g"); } return pr("В апелляции отказали.", "b"); }
-      case "j_escape": {
-        if (R.r(c) < 0.12 + c.luck / 600) { c.jail = 0; c.crime.heat = 90; c.flags.fugitive = 1; B8.turn(c, "побег"); return res(c, "Побег удался! Теперь ты в розыске, но на свободе.", "g", true); }
-        c.jail += 3; c.h -= 8; return pr("Побег провалился. К сроку добавили три года.", "b");
-      }
-      default: return { text: "", kind: "n" };
+      case "post": return B8.social.post(c);
+      case "pet": return { open: "decide:pet_pick" };
+      case "petplay": return B8.pets.play(c);
+      default: if (B8.actRun && B8.actRun[id]) return B8.actRun[id](c); return { text: "", kind: "n" };
     }
   };
   function promote(c, why) {
@@ -598,7 +595,9 @@
     p.role = "spouse"; p.rel = Math.max(p.rel || 60, 65);
     c.spouse = p; c.date = null; c.hap += 10;
     B8.turn(c, "свадьба");
-    return res(c, `Свадьба! ${p.n} — теперь ${p.sex === "f" ? "твоя жена" : "твой муж"}. ${R.pick(c, ["Гуляли три дня.", "Танцевали до утра.", "Тётя опять плакала больше всех."])}`, "g", true);
+    const rr = res(c, `Свадьба! ${p.n} — теперь ${p.sex === "f" ? "твоя жена" : "твой муж"}. ${R.pick(c, ["Гуляли три дня.", "Танцевали до утра.", "Тётя опять плакала больше всех."])}`, "g", true);
+    B8.scene(c, "wedding"); if (B8.voice) B8.voice(c, "wedding");
+    return rr;
   };
   A.haveKid = function (c, adopted) {
     const s = R.chance(c, 0.51) ? "m" : "f";
@@ -610,7 +609,10 @@
     const kid = { n, first, sex: s, role: "child", born: c.age, alive: true, died: -1, st: "", close: true, rel: 80, le: clamp(R.gauss(c, B8.lifeExp(K(c), s), 8), 30, 104), adopted: !!adopted };
     c.kids.push(kid); c.hap += 8;
     if (c.kids.length === 1) B8.turn(c, adopted ? "усыновление" : "рождение первого ребёнка");
-    return res(c, adopted ? `Ты усыновил[|а] ребёнка. ${first} — теперь часть семьи.` : `У тебя родил${s === "f" ? "ась дочь" : "ся сын"} — ${first}. Ты смотришь на ${s === "f" ? "неё" : "него"} и не веришь.`, "g", true);
+    const firstKid = c.kids.length === 1;
+    const rr = res(c, adopted ? `Ты усыновил[|а] ребёнка. ${first} — теперь часть семьи.` : `У тебя родил${s === "f" ? "ась дочь" : "ся сын"} — ${first}. Ты смотришь на ${s === "f" ? "неё" : "него"} и не веришь.`, "g", true);
+    if (firstKid) { B8.scene(c, "baby"); if (B8.voice) B8.voice(c, "baby"); }
+    return rr;
   };
   function lastSur(full, P) { const parts = full.split(" "); return P.fl.includes("F") ? parts[0] : parts.slice(1).join(" ").split(" ")[0]; }
   // эмиграция: 3 страны, где жить лучше
@@ -633,7 +635,9 @@
     if (c.crime.on) { c.crime.on = false; c.crime.rank = 0; }
     c.le += (B8.lifeExp(d, c.sex) - B8.lifeExp(old, c.sex)) * 0.5;
     B8.turn(c, "эмиграция: " + d.n);
-    return res(c, `Ты ${refugee ? "бежал[|а]" : "переехал[|а]"}: ${d.n}, город ${d.cities[0]}. Всё чужое — язык, еда, правила.`, "n", true);
+    const rr = res(c, `Ты ${refugee ? "бежал[|а]" : "переехал[|а]"}: ${d.n}, город ${d.cities[0]}. Всё чужое — язык, еда, правила.`, "n", true);
+    B8.scene(c, "emig");
+    return rr;
   };
   A.mortgage = function (c, cash) {
     const gdp = B8.gdp(c), price = gdp * (c.urban ? 6 : 3) * (1 + c.ls * 0.25);

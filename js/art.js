@@ -65,7 +65,8 @@
     const ey = hy + (baby ? 5 : 5);
     const eye = dead ? "#555" : "#1b1b22";
     if (L.eyes) { P(hx + 2, ey, 2, 0.8, eye); P(hx + hw - 4, ey, 2, 0.8, eye); } else { P(hx + 2.5, ey, 1, 1, eye); P(hx + hw - 3.5, ey, 1, 1, eye); }
-    if (c.crime && c.crime.rank >= 4 && age >= 25 && age === c.age && !c.jail) { P(hx + 1, ey - 0.5, hw - 2, 2, "#0c0c10"); }
+    if (c.fug && age === c.age) { P(hx + 1, ey - 0.5, hw - 2, 2, "#0c0c10"); P(hx - 1, hy - 1, hw + 2, 2.5, "#2a2d38"); P(hx + hw - 2, hy + 1, 4, 1, "#2a2d38"); }
+    else if (c.crime && c.crime.rank >= 4 && age >= 25 && age === c.age && !c.jail) { P(hx + 1, ey - 0.5, hw - 2, 2, "#0c0c10"); }
     else if ((L.glasses && age >= 10) || (age >= 50 && L.style !== 0)) { x.strokeStyle = "#2a2a30"; x.lineWidth = Math.max(1, px * 0.5); x.strokeRect((hx + 1.5) * px, (ey - 0.6) * px, 2.6 * px, 2.2 * px); x.strokeRect((hx + hw - 4.1) * px, (ey - 0.6) * px, 2.6 * px, 2.2 * px); }
     const hap = opt.hap != null ? opt.hap : c.hap;
     const my = hy + hh - 3.2;
@@ -74,6 +75,8 @@
     else if (hap < 35) { P(hx + 3, my + 0.8, 1, 0.8, "#6b3a3a"); P(hx + 4, my, 2, 0.8, "#6b3a3a"); P(hx + 6, my + 0.8, 1, 0.8, "#6b3a3a"); }
     else P(hx + 3.5, my + 0.4, 3, 0.8, "#7a3e3e");
     if (L.beard && age >= 22 && !kid) P(hx + (L.beard === 2 ? 0.5 : 2), hy + hh - 4, hw - (L.beard === 2 ? 1 : 4), L.beard === 2 ? 4 : 2, hair);
+    if (c.flags && c.flags.face_tattoo && age >= 18) { P(hx + hw - 3, ey + 1.5, 1, 1, "#2f3d5c"); P(hx + hw - 2.5, ey + 2.5, 1, 1, "#2f3d5c"); }
+    if (L.scar && age >= 18) P(hx + 2, ey + 2, 2, 0.5, "rgba(120,40,40,.6)");
     if (old) { P(hx + 1.5, ey + 2, 1.5, 0.5, "rgba(0,0,0,.25)"); P(hx + hw - 3, ey + 2, 1.5, 0.5, "rgba(0,0,0,.25)"); P(hx + 3, hy + 2, 4, 0.5, "rgba(0,0,0,.18)"); }
     if (baby) { P(hx + 1.5, ey + 2, 1.5, 1, "rgba(255,120,120,.35)"); P(hx + hw - 3, ey + 2, 1.5, 1, "rgba(255,120,120,.35)"); }
     if (dead) { x.fillStyle = "rgba(20,20,30,.45)"; x.fillRect(0, 0, cv.width, cv.height); }
